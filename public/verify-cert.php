@@ -114,7 +114,17 @@ require_once __DIR__ . '/../includes/header.php';
         <h2><?= e($verificationState === 'invalid' ? 'Invalid certificate' : 'Certificate not found') ?></h2>
         <p class="empty-state" style="margin-top:12px;"><?= e($verificationState === 'invalid' ? 'The token does not match our signed certificate record.' : 'We could not find a certificate for this verification token.') ?></p>
     <?php else: ?>
-        <p class="empty-state">Provide a valid certificate verification token to view authenticity details.</p>
+        <h2>Verify A Certificate</h2>
+        <p class="page-subtitle" style="margin-top:10px;">Paste a HackDesk certificate token below to check whether it is authentic.</p>
+        <form method="get" action="<?= e(appPath('public/verify-cert.php')) ?>" style="margin-top:20px;">
+            <input type="hidden" name="type" value="certificate">
+            <div class="form-group">
+                <label for="token">Certificate Token</label>
+                <input id="token" name="token" type="text" required placeholder="Paste the verification token from the certificate QR link">
+            </div>
+            <button type="submit" class="btn-primary">Verify Certificate</button>
+        </form>
+        <p class="empty-state" style="margin-top:16px;">If you scanned a QR from a HackDesk certificate, this page will usually open automatically with the token already included.</p>
     <?php endif; ?>
 </section>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>

@@ -21,8 +21,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('portal/super-admin/hackathons.php' . ($selectedHackathonId !== null ? '?view=' . $selectedHackathonId : ''));
     }
 
-    $hackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT);
     $action = trim((string) ($_POST['action'] ?? ''));
+
+    $hackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT);
 
     if ($hackathonId === false || $hackathonId === null) {
         flash('error', 'Invalid hackathon selected.');
@@ -159,24 +160,32 @@ require_once __DIR__ . '/../../includes/header.php';
     </div>
 </section>
 
-<section class="card" style="margin-bottom:24px;">
-    <form method="get" action="<?= e(appPath('portal/super-admin/hackathons.php')) ?>">
-        <div class="grid grid-3">
-            <div class="form-group">
-                <label for="status">Status Filter</label>
-                <select id="status" name="status">
-                    <option value="">All Statuses</option>
-                    <option value="draft" <?= $statusFilter === 'draft' ? 'selected' : '' ?>>Draft</option>
-                    <option value="registration_open" <?= $statusFilter === 'registration_open' ? 'selected' : '' ?>>Registration Open</option>
-                    <option value="ongoing" <?= $statusFilter === 'ongoing' ? 'selected' : '' ?>>Ongoing</option>
-                    <option value="judging" <?= $statusFilter === 'judging' ? 'selected' : '' ?>>Judging</option>
-                    <option value="completed" <?= $statusFilter === 'completed' ? 'selected' : '' ?>>Completed</option>
-                    <option value="cancelled" <?= $statusFilter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
-                </select>
+<section class="grid grid-3" style="margin-bottom:24px;">
+    <article class="card" style="grid-column: span 2;">
+        <h2>Filter Hackathons</h2>
+        <form method="get" action="<?= e(appPath('portal/super-admin/hackathons.php')) ?>" style="margin-top:16px;">
+            <div class="grid grid-3">
+                <div class="form-group">
+                    <label for="status_filter">Status Filter</label>
+                    <select id="status_filter" name="status">
+                        <option value="">All Statuses</option>
+                        <option value="draft" <?= $statusFilter === 'draft' ? 'selected' : '' ?>>Draft</option>
+                        <option value="registration_open" <?= $statusFilter === 'registration_open' ? 'selected' : '' ?>>Registration Open</option>
+                        <option value="ongoing" <?= $statusFilter === 'ongoing' ? 'selected' : '' ?>>Ongoing</option>
+                        <option value="judging" <?= $statusFilter === 'judging' ? 'selected' : '' ?>>Judging</option>
+                        <option value="completed" <?= $statusFilter === 'completed' ? 'selected' : '' ?>>Completed</option>
+                        <option value="cancelled" <?= $statusFilter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
+                    </select>
+                </div>
             </div>
-        </div>
-        <button type="submit" class="btn-primary">Apply Filter</button>
-    </form>
+            <button type="submit" class="btn-primary">Apply Filter</button>
+        </form>
+    </article>
+    <article class="card">
+        <h2>Create Hackathon</h2>
+        <p class="page-subtitle" style="margin:10px 0 16px;">Open the dedicated creation page to enter all event details cleanly.</p>
+        <a class="btn-primary" href="<?= e(appPath('portal/super-admin/create-hackathon.php')) ?>">Open Create Form</a>
+    </article>
 </section>
 
 <section class="grid grid-3">

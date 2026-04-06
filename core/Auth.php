@@ -7,6 +7,8 @@ require_once __DIR__ . '/helpers.php';
 
 final class Auth
 {
+    private static ?bool $assignedHackathonColumnExists = null;
+
     public static function login(string $email, string $password): bool
     {
         $pdo = Database::getConnection();
@@ -17,8 +19,13 @@ final class Auth
             return false;
         }
 
+        $selectColumns = 'id, name, email, password_hash, role, is_active, login_attempts, locked_until';
+        if (self::hasAssignedHackathonColumn()) {
+            $selectColumns .= ', assigned_hackathon_id';
+        }
+
         $stmt = $pdo->prepare(
-            'SELECT id, name, email, password_hash, role, is_active, login_attempts, locked_until
+            'SELECT ' . $selectColumns . '
              FROM users
              WHERE email = ?
              LIMIT 1'
@@ -55,6 +62,9 @@ final class Auth
             'name' => (string) $user['name'],
             'email' => (string) $user['email'],
             'role' => (string) $user['role'],
+            'assigned_hackathon_id' => isset($user['assigned_hackathon_id']) && $user['assigned_hackathon_id'] !== null
+                ? (int) $user['assigned_hackathon_id']
+                : null,
         ];
 
         self::logLoginAttempt((int) $user['id'], $normalizedEmail, true);
@@ -165,6 +175,28 @@ final class Auth
             substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? 'Unknown'), 0, 300),
             $success ? 1 : 0,
         ]);
+    }
+
+    private static function hasAssignedHackathonColumn(): bool
+    {
+        if (self::$assignedHackathonColumnExists !== null) {
+            return self::$assignedHackathonColumnExists;
+        }
+
+        $pdo = Database::getConnection();
+        $stmt = $pdo->prepare(
+            "SELECT COUNT(*) AS c
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'users'
+               AND COLUMN_NAME = 'assigned_hackathon_id'"
+        );
+        $stmt->execute();
+        $row = $stmt->fetch();
+
+        self::$assignedHackathonColumnExists = ((int) ($row['c'] ?? 0)) > 0;
+
+        return self::$assignedHackathonColumnExists;
     }
 
     private function __construct()

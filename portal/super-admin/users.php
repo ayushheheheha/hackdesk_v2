@@ -11,6 +11,18 @@ require_once __DIR__ . '/../../core/CSRF.php';
 Middleware::requireRole('super_admin');
 
 $pdo = Database::getConnection();
+$hackathonsStmt = $pdo->prepare('SELECT id, name, status FROM hackathons ORDER BY starts_at DESC, id DESC');
+$hackathonsStmt->execute();
+$hackathons = $hackathonsStmt->fetchAll();
+$assignedHackathonColumnStmt = $pdo->prepare(
+    "SELECT COUNT(*) AS c
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'users'
+       AND COLUMN_NAME = 'assigned_hackathon_id'"
+);
+$assignedHackathonColumnStmt->execute();
+$hasAssignedHackathonColumn = ((int) (($assignedHackathonColumnStmt->fetch()['c'] ?? 0))) > 0;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
@@ -24,9 +36,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $name = trim((string) ($_POST['name'] ?? ''));
         $email = strtolower(trim((string) ($_POST['email'] ?? '')));
         $role = trim((string) ($_POST['role'] ?? ''));
+        $assignedHackathonId = filter_input(INPUT_POST, 'assigned_hackathon_id', FILTER_VALIDATE_INT);
 
         if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL) || !in_array($role, ['admin', 'jury', 'staff'], true)) {
             flash('error', 'Enter a valid name, email, and role.');
+            redirect('portal/super-admin/users.php');
+        }
+
+        if ($assignedHackathonId === false || $assignedHackathonId === null) {
+            flash('error', 'Select the hackathon this user belongs to.');
+            redirect('portal/super-admin/users.php');
+        }
+
+        $hackathonCheckStmt = $pdo->prepare('SELECT id FROM hackathons WHERE id = ? LIMIT 1');
+        $hackathonCheckStmt->execute([$assignedHackathonId]);
+        if ($hackathonCheckStmt->fetch() === false) {
+            flash('error', 'Select a valid hackathon for this user.');
             redirect('portal/super-admin/users.php');
         }
 
@@ -38,23 +63,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $temporaryPassword = generateTemporaryPassword();
-        $insertStmt = $pdo->prepare(
-            'INSERT INTO users (name, email, password_hash, role, is_active, login_attempts, locked_until)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        );
-        $insertStmt->execute([
-            $name,
-            $email,
-            password_hash($temporaryPassword, PASSWORD_ARGON2ID),
-            $role,
-            1,
-            0,
-            null,
-        ]);
+        if ($hasAssignedHackathonColumn) {
+            $insertStmt = $pdo->prepare(
+                'INSERT INTO users (name, email, password_hash, role, assigned_hackathon_id, is_active, login_attempts, locked_until)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            $insertStmt->execute([
+                $name,
+                $email,
+                password_hash($temporaryPassword, PASSWORD_ARGON2ID),
+                $role,
+                $assignedHackathonId,
+                1,
+                0,
+                null,
+            ]);
+        } else {
+            $insertStmt = $pdo->prepare(
+                'INSERT INTO users (name, email, password_hash, role, is_active, login_attempts, locked_until)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)'
+            );
+            $insertStmt->execute([
+                $name,
+                $email,
+                password_hash($temporaryPassword, PASSWORD_ARGON2ID),
+                $role,
+                1,
+                0,
+                null,
+            ]);
+        }
 
         $userId = (int) $pdo->lastInsertId();
         $sent = sendUserAccountEmail($email, $name, $temporaryPassword);
-        logActivity('user_created', 'user', $userId, ['role' => $role, 'email_sent' => $sent], null);
+        logActivity('user_created', 'user', $userId, [
+            'role' => $role,
+            'email_sent' => $sent,
+            'assigned_hackathon_id' => $assignedHackathonId,
+        ], $assignedHackathonId);
 
         if ($sent) {
             flash('success', 'User created and login email sent.');
@@ -101,38 +147,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$usersStmt = $pdo->prepare(
-    'SELECT
-        u.id,
-        u.name,
-        u.email,
-        u.role,
-        u.is_active,
-        u.created_at,
-        CASE
-            WHEN u.role = "admin" THEN (
-                SELECT GROUP_CONCAT(h.name ORDER BY h.name SEPARATOR ", ")
-                FROM hackathons h
-                WHERE h.created_by = u.id
-            )
-            WHEN u.role = "jury" THEN (
-                SELECT GROUP_CONCAT(DISTINCT h.name ORDER BY h.name SEPARATOR ", ")
-                FROM jury_assignments ja
-                INNER JOIN hackathons h ON h.id = ja.hackathon_id
-                WHERE ja.jury_user_id = u.id
-            )
-            WHEN u.role = "staff" THEN (
-                SELECT GROUP_CONCAT(DISTINCT h.name ORDER BY h.name SEPARATOR ", ")
-                FROM participants p
-                INNER JOIN hackathons h ON h.id = p.hackathon_id
-                WHERE p.checked_in_by = u.id
-            )
-            ELSE NULL
-        END AS assigned_hackathons
-     FROM users u
-     WHERE u.role IN (?, ?, ?)
-     ORDER BY FIELD(u.role, "admin", "jury", "staff"), u.name ASC'
-);
+$usersSql = $hasAssignedHackathonColumn
+    ? 'SELECT
+            u.id,
+            u.name,
+            u.email,
+            u.role,
+            u.assigned_hackathon_id,
+            u.is_active,
+            u.created_at,
+            h.name AS assigned_hackathon_name
+         FROM users u
+         LEFT JOIN hackathons h ON h.id = u.assigned_hackathon_id
+         WHERE u.role IN (?, ?, ?)
+         ORDER BY FIELD(u.role, "admin", "jury", "staff"), u.name ASC'
+    : 'SELECT
+            u.id,
+            u.name,
+            u.email,
+            u.role,
+            NULL AS assigned_hackathon_id,
+            u.is_active,
+            u.created_at,
+            "Hackathon 1 (pending migration)" AS assigned_hackathon_name
+         FROM users u
+         WHERE u.role IN (?, ?, ?)
+         ORDER BY FIELD(u.role, "admin", "jury", "staff"), u.name ASC';
+$usersStmt = $pdo->prepare($usersSql);
 $usersStmt->execute(['admin', 'jury', 'staff']);
 $users = $usersStmt->fetchAll();
 
@@ -149,7 +190,7 @@ require_once __DIR__ . '/../../includes/header.php';
 <section class="grid grid-3">
     <article class="card">
         <h2>Create User</h2>
-        <p class="page-subtitle" style="margin:10px 0 16px;">A temporary password is generated automatically and emailed to the user.</p>
+        <p class="page-subtitle" style="margin:10px 0 16px;">A temporary password is generated automatically, and you now assign the user to a specific hackathon here.</p>
         <form method="post" action="<?= e(appPath('portal/super-admin/users.php')) ?>">
             <?= CSRF::field() ?>
             <input type="hidden" name="action" value="create_user">
@@ -169,6 +210,17 @@ require_once __DIR__ . '/../../includes/header.php';
                     <option value="staff">Staff</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="assigned_hackathon_id">Assigned Hackathon</label>
+                <select id="assigned_hackathon_id" name="assigned_hackathon_id" required>
+                    <option value="">Select Hackathon</option>
+                    <?php foreach ($hackathons as $hackathon): ?>
+                        <option value="<?= e((string) $hackathon['id']) ?>">
+                            <?= e((string) $hackathon['name']) ?> (<?= e(ucwords(str_replace('_', ' ', (string) $hackathon['status']))) ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
             <button type="submit" class="btn-primary">Create User</button>
         </form>
     </article>
@@ -183,7 +235,7 @@ require_once __DIR__ . '/../../includes/header.php';
                     <th>Email</th>
                     <th>Role</th>
                     <th>Status</th>
-                    <th>Assigned Hackathons</th>
+                    <th>Assigned Hackathon</th>
                     <th>Action</th>
                 </tr>
                 </thead>
@@ -197,7 +249,7 @@ require_once __DIR__ . '/../../includes/header.php';
                             <td><?= e((string) $user['email']) ?></td>
                             <td><?= e(ucwords(str_replace('_', ' ', (string) $user['role']))) ?></td>
                             <td><span class="badge <?= (int) $user['is_active'] === 1 ? 'badge-success' : 'badge-danger' ?>"><?= (int) $user['is_active'] === 1 ? 'Active' : 'Inactive' ?></span></td>
-                            <td><?= e((string) ($user['assigned_hackathons'] ?? 'Not assigned yet')) ?></td>
+                            <td><?= e((string) ($user['assigned_hackathon_name'] ?? 'Not assigned yet')) ?></td>
                             <td>
                                 <form method="post" action="<?= e(appPath('portal/super-admin/users.php')) ?>">
                                     <?= CSRF::field() ?>

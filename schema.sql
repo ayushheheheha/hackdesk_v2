@@ -7,6 +7,7 @@ CREATE TABLE users (
   email VARCHAR(180) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('super_admin','admin','jury','staff') NOT NULL,
+  assigned_hackathon_id INT UNSIGNED NULL,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   login_attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
   locked_until DATETIME NULL,
@@ -33,6 +34,10 @@ CREATE TABLE hackathons (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
+
+ALTER TABLE users
+  ADD CONSTRAINT fk_users_assigned_hackathon
+  FOREIGN KEY (assigned_hackathon_id) REFERENCES hackathons(id) ON DELETE SET NULL;
 
 CREATE TABLE rounds (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

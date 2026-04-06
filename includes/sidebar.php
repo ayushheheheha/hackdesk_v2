@@ -9,6 +9,7 @@ $navigation = [
     'super_admin' => [
         'Platform' => [
             'Dashboard' => 'portal/super-admin/dashboard.php',
+            'Create Hackathon' => 'portal/super-admin/create-hackathon.php',
             'Hackathons' => 'portal/super-admin/hackathons.php',
             'Users' => 'portal/super-admin/users.php',
             'Activity Log' => 'portal/super-admin/activity-log.php',

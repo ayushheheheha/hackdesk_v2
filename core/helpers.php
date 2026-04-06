@@ -177,6 +177,37 @@ function formatUtcToIst(?string $datetimeStr, string $format = 'd M Y, h:i A'): 
     return $dateTime->setTimezone(new DateTimeZone('Asia/Kolkata'))->format($format);
 }
 
+function istInputToUtc(?string $datetimeStr): ?string
+{
+    $value = trim((string) $datetimeStr);
+    if ($value === '') {
+        return null;
+    }
+
+    $timezone = new DateTimeZone('Asia/Kolkata');
+    $formats = ['Y-m-d\TH:i', 'Y-m-d H:i:s', 'Y-m-d H:i'];
+
+    foreach ($formats as $format) {
+        $dateTime = DateTimeImmutable::createFromFormat($format, $value, $timezone);
+        if ($dateTime instanceof DateTimeImmutable) {
+            return $dateTime->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+        }
+    }
+
+    return null;
+}
+
+function utcToInput(?string $datetimeStr): string
+{
+    if ($datetimeStr === null || trim($datetimeStr) === '') {
+        return '';
+    }
+
+    $dateTime = new DateTimeImmutable($datetimeStr, new DateTimeZone('UTC'));
+
+    return $dateTime->setTimezone(new DateTimeZone('Asia/Kolkata'))->format('Y-m-d\TH:i');
+}
+
 function generateParticipantSessionToken(): string
 {
     return generateUniqueValue('participant_sessions', 'token', 24);

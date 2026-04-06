@@ -283,9 +283,11 @@ label {
     background: linear-gradient(135deg, rgba(91, 91, 214, 0.22), rgba(91, 91, 214, 0.08));
     border: 1px solid rgba(91, 91, 214, 0.28);
     color: #C7D2FE;
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
+}
+
+.landing-card-icon svg {
+    width: 22px;
+    height: 22px;
 }
 
 .landing-card h2 {

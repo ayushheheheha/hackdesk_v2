@@ -10,6 +10,23 @@ require_once __DIR__ . '/../core/CSRF.php';
 $pdo = Database::getConnection();
 $hackathonId = filter_input(INPUT_GET, 'h', FILTER_VALIDATE_INT) ?: filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT);
 $selectedType = normalizeParticipantType((string) ($_GET['type'] ?? $_POST['participant_type'] ?? ''));
+$availableHackathonsStmt = $pdo->prepare(
+    'SELECT
+        id,
+        name,
+        venue,
+        starts_at,
+        registration_deadline,
+        status
+     FROM hackathons
+     WHERE status = ?
+       AND starts_at > ?
+       AND (registration_deadline IS NULL OR registration_deadline > ?)
+     ORDER BY starts_at ASC, id ASC'
+);
+$nowUtc = utcNow()->format('Y-m-d H:i:s');
+$availableHackathonsStmt->execute(['registration_open', $nowUtc, $nowUtc]);
+$availableHackathons = $availableHackathonsStmt->fetchAll();
 
 $hackathon = null;
 if ($hackathonId !== false && $hackathonId !== null) {
@@ -188,7 +205,43 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
 </section>
 
-<?php if ($hackathon === false || $hackathon === null): ?>
+<section class="card" style="margin-bottom:24px;">
+    <h2>Select A Hackathon</h2>
+    <p class="page-subtitle" style="margin:10px 0 16px;">Only upcoming hackathons that are still open for registration are shown here.</p>
+    <?php if ($availableHackathons === []): ?>
+        <p class="empty-state">There are no upcoming hackathons open for registration right now.</p>
+    <?php else: ?>
+        <form method="get" action="<?= e(appPath('public/register.php')) ?>">
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label for="hackathon_picker">Hackathon</label>
+                    <select id="hackathon_picker" name="h" onchange="this.form.submit()">
+                        <option value="">Choose Hackathon</option>
+                        <?php foreach ($availableHackathons as $availableHackathon): ?>
+                            <option value="<?= e((string) $availableHackathon['id']) ?>" <?= (int) ($availableHackathon['id'] ?? 0) === (int) $hackathonId ? 'selected' : '' ?>>
+                                <?= e((string) $availableHackathon['name']) ?> | <?= e(formatUtcToIst((string) $availableHackathon['starts_at'], 'd M Y')) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="type_picker">Student Type</label>
+                    <select id="type_picker" name="type" onchange="this.form.submit()">
+                        <option value="">Choose Type</option>
+                        <option value="internal" <?= $selectedType === 'internal' ? 'selected' : '' ?>>Internal Student</option>
+                        <option value="external" <?= $selectedType === 'external' ? 'selected' : '' ?>>External Participant</option>
+                    </select>
+                </div>
+            </div>
+        </form>
+    <?php endif; ?>
+</section>
+
+<?php if ($hackathonId === false || $hackathonId === null): ?>
+    <section class="card">
+        <p class="empty-state">Choose an upcoming hackathon above to begin registration.</p>
+    </section>
+<?php elseif ($hackathon === false || $hackathon === null): ?>
     <section class="card">
         <p class="empty-state">We could not find that hackathon. Please open the registration link provided by the event organizers.</p>
     </section>
