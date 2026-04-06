@@ -1,0 +1,14 @@
+{
+    "name": "hackdesk/hackdesk-v2",
+    "description": "HackDesk v2 hackathon management system",
+    "type": "project",
+    "require": {
+        "php": "^8.2",
+        "chillerlan/php-qrcode": "^5.0",
+        "phpmailer/phpmailer": "^6.9",
+        "setasign/fpdf": "^1.8"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

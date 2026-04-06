@@ -1,0 +1,11 @@
+/vendor/
+/config/config.php
+/logs/*.log
+/uploads/certificates/**
+/uploads/id-cards/**
+/uploads/submissions/**
+!/uploads/.htaccess
+!/uploads/certificates/
+!/uploads/id-cards/
+!/uploads/submissions/
+!.gitkeep
