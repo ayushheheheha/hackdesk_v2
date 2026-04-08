@@ -78,7 +78,44 @@ function generateJoinCode(): string
 
 function generateBarcodeUID(): string
 {
-    return generateUniqueValue('participants', 'barcode_uid', 8);
+    $pdo = Database::getConnection();
+    $yearPrefix = (new DateTimeImmutable('now', new DateTimeZone('Asia/Kolkata')))->format('y');
+    $prefix = $yearPrefix . 'HAK';
+    $lockName = 'hackdesk_barcode_uid_' . $yearPrefix;
+
+    $lockStmt = $pdo->prepare('SELECT GET_LOCK(?, 10)');
+    $lockStmt->execute([$lockName]);
+    $lockAcquired = (int) $lockStmt->fetchColumn() === 1;
+
+    if (!$lockAcquired) {
+        throw new RuntimeException('Unable to generate registration number right now.');
+    }
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT barcode_uid
+             FROM participants
+             WHERE barcode_uid LIKE ?
+             ORDER BY barcode_uid DESC
+             LIMIT 1'
+        );
+        $stmt->execute([$prefix . '%']);
+        $lastValue = $stmt->fetchColumn();
+
+        $nextNumber = 1;
+        if (is_string($lastValue) && preg_match('/^\d{2}HAK(\d{4})$/', $lastValue, $matches) === 1) {
+            $nextNumber = ((int) $matches[1]) + 1;
+        }
+
+        if ($nextNumber > 9999) {
+            throw new RuntimeException('Yearly registration number limit reached.');
+        }
+
+        return sprintf('%s%04d', $prefix, $nextNumber);
+    } finally {
+        $unlockStmt = $pdo->prepare('SELECT RELEASE_LOCK(?)');
+        $unlockStmt->execute([$lockName]);
+    }
 }
 
 function generateQRToken(): string
