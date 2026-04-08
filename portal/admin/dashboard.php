@@ -10,14 +10,18 @@ require_once __DIR__ . '/../../core/helpers.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
-$hackathonStmt = $pdo->prepare(
-    'SELECT id, name, venue, starts_at, registration_deadline, status
-     FROM hackathons
-     ORDER BY created_at DESC, id DESC
-     LIMIT 1'
-);
-$hackathonStmt->execute();
-$hackathon = $hackathonStmt->fetch() ?: null;
+$selectedHackathonId = resolveSelectedHackathonId($pdo);
+$hackathon = null;
+if ($selectedHackathonId !== null) {
+    $hackathonStmt = $pdo->prepare(
+        'SELECT id, name, venue, starts_at, registration_deadline, status
+         FROM hackathons
+         WHERE id = ?
+         LIMIT 1'
+    );
+    $hackathonStmt->execute([$selectedHackathonId]);
+    $hackathon = $hackathonStmt->fetch() ?: null;
+}
 
 $stats = ['participants' => 0, 'teams' => 0, 'rounds' => 0];
 $recentParticipants = [];

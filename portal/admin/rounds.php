@@ -11,12 +11,10 @@ require_once __DIR__ . '/../../core/CSRF.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
-$hackathonsStmt = $pdo->prepare('SELECT id, name FROM hackathons ORDER BY created_at DESC, id DESC');
-$hackathonsStmt->execute();
-$hackathons = $hackathonsStmt->fetchAll();
-$selectedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT)
-    ?: filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_INT)
-    ?: (($hackathons[0]['id'] ?? null) !== null ? (int) $hackathons[0]['id'] : null);
+$requestedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT)
+    ?: filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_INT);
+$hackathons = getAccessibleHackathons($pdo);
+$selectedHackathonId = resolveSelectedHackathonId($pdo, $requestedHackathonId);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
@@ -41,6 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'create' || $action === 'update') {
         if ($name === '' || $roundNumber === false || $roundNumber === null || $submissionDeadline === '') {
             flash('error', 'Name, round number, and submission deadline are required.');
+            redirect('portal/admin/rounds.php?hackathon_id=' . $selectedHackathonId);
+        }
+
+        if ($criteria === []) {
+            flash('error', 'Add at least one judging criterion before saving the round.');
             redirect('portal/admin/rounds.php?hackathon_id=' . $selectedHackathonId);
         }
     }

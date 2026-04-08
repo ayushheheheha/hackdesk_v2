@@ -157,26 +157,32 @@ require_once __DIR__ . '/../../includes/header.php';
     </article>
     <article class="card">
         <h2>Scoring</h2>
-        <form method="post" action="<?= e(appPath('portal/jury/score.php?assignment_id=' . (int) $assignmentId)) ?>" style="margin-top:14px;">
-            <?= CSRF::field() ?>
-            <input type="hidden" name="assignment_id" value="<?= e((string) $assignmentId) ?>">
-            <?php foreach ($criteria as $criterion): ?>
-                <?php $criterionName = (string) $criterion['name']; $max = (float) $criterion['max']; ?>
+        <?php if ($criteria === []): ?>
+            <div class="empty-state" style="margin-top:14px;">
+                This round has no judging criteria configured yet. Ask the event admin to update the round before scoring submissions.
+            </div>
+        <?php else: ?>
+            <form method="post" action="<?= e(appPath('portal/jury/score.php?assignment_id=' . (int) $assignmentId)) ?>" style="margin-top:14px;">
+                <?= CSRF::field() ?>
+                <input type="hidden" name="assignment_id" value="<?= e((string) $assignmentId) ?>">
+                <?php foreach ($criteria as $criterion): ?>
+                    <?php $criterionName = (string) $criterion['name']; $max = (float) $criterion['max']; ?>
+                    <div class="form-group">
+                        <label><?= e($criterionName) ?> - max <?= e((string) $max) ?> pts</label>
+                        <input class="criterion-input" name="criteria[<?= e($criterionName) ?>]" type="number" min="0" max="<?= e((string) $max) ?>" step="0.5" value="<?= e((string) ($savedScores[$criterionName] ?? '0')) ?>">
+                    </div>
+                <?php endforeach; ?>
                 <div class="form-group">
-                    <label><?= e($criterionName) ?> - max <?= e((string) $max) ?> pts</label>
-                    <input class="criterion-input" name="criteria[<?= e($criterionName) ?>]" type="number" min="0" max="<?= e((string) $max) ?>" step="0.5" value="<?= e((string) ($savedScores[$criterionName] ?? '0')) ?>">
+                    <label>Total Score</label>
+                    <input id="total-score" type="number" value="<?= e((string) ($assignment['total_score'] ?? '0')) ?>" readonly>
                 </div>
-            <?php endforeach; ?>
-            <div class="form-group">
-                <label>Total Score</label>
-                <input id="total-score" type="number" value="<?= e((string) ($assignment['total_score'] ?? '0')) ?>" readonly>
-            </div>
-            <div class="form-group">
-                <label for="remarks">Remarks</label>
-                <textarea id="remarks" name="remarks" rows="4"><?= e((string) ($assignment['remarks'] ?? '')) ?></textarea>
-            </div>
-            <button type="submit" class="btn-primary">Save Score</button>
-        </form>
+                <div class="form-group">
+                    <label for="remarks">Remarks</label>
+                    <textarea id="remarks" name="remarks" rows="4"><?= e((string) ($assignment['remarks'] ?? '')) ?></textarea>
+                </div>
+                <button type="submit" class="btn-primary">Save Score</button>
+            </form>
+        <?php endif; ?>
         <?php if ($assignment['updated_at'] !== null): ?>
             <p class="page-subtitle" style="margin-top:12px;">Last saved: <?= e(formatUtcToIst((string) $assignment['updated_at'])) ?></p>
         <?php endif; ?>
@@ -185,6 +191,9 @@ require_once __DIR__ . '/../../includes/header.php';
 <script>
 const totalScoreInput = document.getElementById('total-score');
 function updateTotalScore() {
+    if (!totalScoreInput) {
+        return;
+    }
     let total = 0;
     document.querySelectorAll('.criterion-input').forEach((input) => {
         total += Number(input.value || 0);

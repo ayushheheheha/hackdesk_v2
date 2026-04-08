@@ -11,12 +11,10 @@ require_once __DIR__ . '/../../core/CSRF.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
-$hackathonsStmt = $pdo->prepare('SELECT id, name FROM hackathons ORDER BY created_at DESC, id DESC');
-$hackathonsStmt->execute();
-$hackathons = $hackathonsStmt->fetchAll();
-$selectedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT)
-    ?: filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_INT)
-    ?: (($hackathons[0]['id'] ?? null) !== null ? (int) $hackathons[0]['id'] : null);
+$requestedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT)
+    ?: filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_INT);
+$hackathons = getAccessibleHackathons($pdo);
+$selectedHackathonId = resolveSelectedHackathonId($pdo, $requestedHackathonId);
 $selectedRoundId = filter_input(INPUT_POST, 'round_id', FILTER_VALIDATE_INT)
     ?: filter_input(INPUT_GET, 'round_id', FILTER_VALIDATE_INT);
 

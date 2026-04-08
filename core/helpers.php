@@ -161,6 +161,58 @@ function currentUserName(): string
     return e($_SESSION['user']['name'] ?? 'User');
 }
 
+function currentUserRole(): ?string
+{
+    $role = $_SESSION['user']['role'] ?? null;
+
+    return is_string($role) && $role !== '' ? $role : null;
+}
+
+function currentAssignedHackathonId(): ?int
+{
+    $value = $_SESSION['user']['assigned_hackathon_id'] ?? null;
+
+    return is_int($value) ? $value : (is_numeric($value) ? (int) $value : null);
+}
+
+function getAccessibleHackathons(PDO $pdo): array
+{
+    $role = currentUserRole();
+    $assignedHackathonId = currentAssignedHackathonId();
+
+    if ($role === 'super_admin') {
+        $stmt = $pdo->prepare('SELECT id, name FROM hackathons ORDER BY created_at DESC, id DESC');
+        $stmt->execute();
+
+        return $stmt->fetchAll();
+    }
+
+    if (in_array($role, ['admin', 'jury', 'staff'], true) && $assignedHackathonId !== null) {
+        $stmt = $pdo->prepare('SELECT id, name FROM hackathons WHERE id = ? LIMIT 1');
+        $stmt->execute([$assignedHackathonId]);
+
+        return $stmt->fetchAll();
+    }
+
+    return [];
+}
+
+function resolveSelectedHackathonId(PDO $pdo, ?int $requestedHackathonId = null): ?int
+{
+    $accessibleHackathons = getAccessibleHackathons($pdo);
+    if ($accessibleHackathons === []) {
+        return null;
+    }
+
+    $accessibleIds = array_map(static fn(array $hackathon): int => (int) $hackathon['id'], $accessibleHackathons);
+
+    if ($requestedHackathonId !== null && in_array($requestedHackathonId, $accessibleIds, true)) {
+        return $requestedHackathonId;
+    }
+
+    return $accessibleIds[0];
+}
+
 function utcNow(): DateTimeImmutable
 {
     return new DateTimeImmutable('now', new DateTimeZone('UTC'));

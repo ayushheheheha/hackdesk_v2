@@ -10,28 +10,35 @@ require_once __DIR__ . '/../../core/helpers.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
-$hackathonsStmt = $pdo->prepare(
-    'SELECT
-        h.id,
-        h.name,
-        h.tagline,
-        h.description,
-        h.venue,
-        h.starts_at,
-        h.ends_at,
-        h.registration_deadline,
-        h.ps_selection_deadline,
-        h.min_team_size,
-        h.max_team_size,
-        h.leaderboard_visible,
-        h.status,
-        u.name AS organizer_name
-     FROM hackathons h
-     INNER JOIN users u ON u.id = h.created_by
-     ORDER BY h.created_at DESC, h.id DESC'
-);
-$hackathonsStmt->execute();
-$hackathons = $hackathonsStmt->fetchAll();
+$accessibleHackathons = getAccessibleHackathons($pdo);
+$hackathons = [];
+if ($accessibleHackathons !== []) {
+    $hackathonIds = array_map(static fn(array $hackathon): int => (int) $hackathon['id'], $accessibleHackathons);
+    $placeholders = implode(',', array_fill(0, count($hackathonIds), '?'));
+    $hackathonsStmt = $pdo->prepare(
+        'SELECT
+            h.id,
+            h.name,
+            h.tagline,
+            h.description,
+            h.venue,
+            h.starts_at,
+            h.ends_at,
+            h.registration_deadline,
+            h.ps_selection_deadline,
+            h.min_team_size,
+            h.max_team_size,
+            h.leaderboard_visible,
+            h.status,
+            u.name AS organizer_name
+         FROM hackathons h
+         INNER JOIN users u ON u.id = h.created_by
+         WHERE h.id IN (' . $placeholders . ')
+         ORDER BY h.created_at DESC, h.id DESC'
+    );
+    $hackathonsStmt->execute($hackathonIds);
+    $hackathons = $hackathonsStmt->fetchAll();
+}
 
 $pageTitle = 'Event Setup';
 require_once __DIR__ . '/../../includes/header.php';
