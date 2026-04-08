@@ -2,6 +2,22 @@
 
 declare(strict_types=1);
 
+/*
+ * TEMPLATE SETUP REQUIRED
+ * Before this class works, convert the HTML templates to PDF:
+ *
+ * ID Card:
+ *   Open templates/id-card-template.html in Chrome
+ *   Print -> Save as PDF -> Paper: 105x148mm, Margins: None
+ *   Save to: templates/id-card-template.pdf
+ *
+ * Certificate:
+ *   Open templates/certificate-template.html in Chrome
+ *   Print -> Save as PDF -> Paper: A4 Landscape, Margins: None
+ *   Save to: templates/certificate-template.pdf
+ *   (2-page PDF: page 1 = participation, page 2 = achievement)
+ */
+
 require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/helpers.php';
@@ -9,6 +25,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use chillerlan\QRCode\QRCode;
 use chillerlan\QRCode\QROptions;
+use Picqer\Barcode\BarcodeGeneratorPNG;
 use setasign\Fpdi\Fpdi;
 
 if (!function_exists('get_magic_quotes_runtime')) {
@@ -31,7 +48,46 @@ if (!class_exists('FPDF')) {
 
 final class IDCard
 {
-    public static function generate(int $participantId): string
+    public const CARD_W = 105.0;
+    public const CARD_H = 148.0;
+
+    public const NAME_X = 20.0;
+    public const NAME_Y = 83.0;
+    public const NAME_W = 65.0;
+    public const NAME_H = 8.0;
+
+    public const TYPE_BADGE_X = 28.0;
+    public const TYPE_BADGE_Y = 93.2;
+    public const TYPE_BADGE_W = 49.0;
+    public const TYPE_BADGE_H = 6.8;
+
+    public const QR_X = 30.0;
+    public const QR_Y = 36.5;
+    public const QR_SIZE = 45.0;
+
+    public const ID_VALUE_X = 33.0;
+    public const ID_VALUE_Y = 106.8-1;
+    public const ID_VALUE_W = 46.0;
+    public const ID_VALUE_H = 4.8;
+
+    public const EMAIL_VALUE_X = 33.0;
+    public const EMAIL_VALUE_Y = 112.2-1;
+    public const EMAIL_VALUE_W = 46.0;
+    public const EMAIL_VALUE_H = 4.8;
+
+    public const PHONE_VALUE_X = 33.0;
+    public const PHONE_VALUE_Y = 117.6-1;
+    public const PHONE_VALUE_W = 46.0;
+    public const PHONE_VALUE_H = 4.8;
+
+    public const BARCODE_X = 30.0;
+    public const BARCODE_Y = 125.8;
+    public const BARCODE_W = 45.0;
+    public const BARCODE_H = 9.6;
+
+    private const TEMPLATE_PDF = 'templates/id-card-template.pdf';
+
+    public static function generate(int $participantId): ?string
     {
         $pdo = Database::getConnection();
         $stmt = $pdo->prepare(
@@ -41,6 +97,7 @@ final class IDCard
                 p.participant_type,
                 p.name,
                 p.email,
+                p.phone,
                 p.vit_reg_no,
                 p.college,
                 p.department,
@@ -56,105 +113,254 @@ final class IDCard
              LIMIT 1'
         );
         $stmt->execute([$participantId]);
-        $participant = $stmt->fetch();
+        $participant = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if ($participant === false) {
-            throw new RuntimeException('Participant not found for ID card generation.');
+        if (!is_array($participant)) {
+            return null;
         }
 
-        $directory = dirname(__DIR__) . '/uploads/id-cards/' . (int) $participant['hackathon_id'];
-        if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
-            throw new RuntimeException('Unable to create ID card directory.');
+        $templatePath = self::validatedTemplatePath(self::TEMPLATE_PDF);
+
+        return $templatePath !== null
+            ? self::generateFromTemplate($participant, $templatePath)
+            : self::generatePlain($participant);
+    }
+
+    public static function generateFromTemplate(array $participant, string $templatePath): string
+    {
+        $savePath = self::savePath($participant);
+        $pdf = new Fpdi('P', 'mm', [self::CARD_W, self::CARD_H]);
+        $pdf->SetAutoPageBreak(false);
+        $pdf->AddPage();
+        $pdf->setSourceFile($templatePath);
+        $tpl = $pdf->importPage(1);
+        $pdf->useTemplate($tpl, 0, 0, self::CARD_W, self::CARD_H);
+
+        $name = strtoupper(self::truncate((string) $participant['name'], 32));
+        $idLine = ($participant['participant_type'] ?? '') === 'internal'
+            ? self::truncate((string) ($participant['vit_reg_no'] ?? 'N/A'), 22)
+            : self::truncate((string) ($participant['barcode_uid'] ?? 'N/A'), 22);
+        $emailLine = trim((string) ($participant['email'] ?? 'N/A'));
+        $phoneLine = self::truncate((string) ($participant['phone'] ?? 'N/A'), 18);
+
+        $pdf->SetFont('Helvetica', 'B', 15);
+        $pdf->SetTextColor(31, 46, 77);
+        $pdf->SetXY(self::NAME_X, self::NAME_Y);
+        $pdf->Cell(self::NAME_W, self::NAME_H, $name, 0, 0, 'C');
+
+        $pdf->SetFont('Helvetica', '', 8);
+        $pdf->SetTextColor(35, 49, 76);
+        $pdf->SetXY(self::ID_VALUE_X, self::ID_VALUE_Y);
+        $pdf->Cell(self::ID_VALUE_W, self::ID_VALUE_H, $idLine, 0, 0, 'L');
+        $pdf->SetXY(self::EMAIL_VALUE_X, self::EMAIL_VALUE_Y);
+        $pdf->SetFont('Helvetica', '', 6.2);
+        $pdf->Cell(self::EMAIL_VALUE_W, self::EMAIL_VALUE_H, $emailLine, 0, 0, 'L');
+        $pdf->SetXY(self::PHONE_VALUE_X, self::PHONE_VALUE_Y);
+        $pdf->SetFont('Helvetica', '', 8);
+        $pdf->Cell(self::PHONE_VALUE_W, self::PHONE_VALUE_H, $phoneLine, 0, 0, 'L');
+
+        $qrPath = self::generateQRPng(
+            rtrim(APP_URL, '/') . '/public/verify-cert.php?type=checkin&token=' . urlencode((string) $participant['qr_token']),
+            (int) $participant['id']
+        );
+        if ($qrPath !== null) {
+            $pdf->Image($qrPath, self::QR_X, self::QR_Y, self::QR_SIZE, self::QR_SIZE, 'PNG');
+            @unlink($qrPath);
         }
 
-        $pdfPath = $directory . '/' . (int) $participant['id'] . '.pdf';
-        $qrPath = $directory . '/qr-' . (int) $participant['id'] . '.png';
-        self::generateQrImage((string) $participant['qr_token'], $qrPath);
+        $barcodePath = self::generateBarcodePng((string) $participant['barcode_uid'], (int) $participant['id']);
+        if ($barcodePath !== null) {
+            $pdf->Image($barcodePath, self::BARCODE_X, self::BARCODE_Y, self::BARCODE_W, self::BARCODE_H, 'PNG');
+            @unlink($barcodePath);
+        }
 
-        $pdf = new HackDeskPDF('P', 'mm', [105, 148]);
+        $pdf->Output('F', $savePath);
+        self::updateIdCardPath((int) $participant['id'], (int) $participant['hackathon_id']);
+
+        return $savePath;
+    }
+
+    public static function generatePlain(array $participant): string
+    {
+        $savePath = self::savePath($participant);
+        $pdf = new FPDF('P', 'mm', [self::CARD_W, self::CARD_H]);
         $pdf->SetAutoPageBreak(false);
         $pdf->AddPage();
 
-        $pdf->SetFillColor(91, 91, 214);
-        $pdf->Rect(0, 0, 105, 28, 'F');
+        $pdf->SetFillColor(255, 255, 255);
+        $pdf->Rect(0, 0, self::CARD_W, self::CARD_H, 'F');
+        $pdf->SetDrawColor(220, 220, 220);
+        $pdf->Rect(6, 6, 93, 136, 'D');
+        $pdf->SetFillColor(17, 17, 17);
+        $pdf->Rect(6, 6, 93, 20, 'F');
         $pdf->SetTextColor(255, 255, 255);
-        $pdf->SetFont('Arial', 'B', 16);
-        $pdf->SetXY(10, 8);
-        $pdf->Cell(85, 7, self::truncateAscii((string) $participant['hackathon_name'], 34), 0, 2);
-        $pdf->SetFont('Arial', '', 10);
-        $pdf->Cell(85, 5, formatUtcToIst((string) $participant['starts_at'], 'd M Y'), 0, 0);
+        $pdf->SetFont('Helvetica', 'B', 12);
+        $pdf->SetXY(12, 13);
+        $pdf->Cell(81, 5, 'HackDesk', 0, 0, 'C');
 
-        $pdf->SetDrawColor(39, 39, 42);
-        $pdf->SetFillColor(19, 19, 22);
-        $pdf->Rect(8, 34, 89, 105, 'D');
+        $pdf->SetDrawColor(140, 140, 140);
+        $pdf->Rect(self::QR_X, self::QR_Y, self::QR_SIZE, self::QR_SIZE, 'D');
 
-        $pdf->SetFillColor(28, 28, 32);
-        $pdf->Rect(14, 40, 26, 26, 'F');
-        $pdf->SetFillColor(91, 91, 214);
-        $pdf->Circle(27, 53, 9, 'F');
-        $pdf->SetTextColor(255, 255, 255);
-        $pdf->SetFont('Arial', 'B', 14);
-        $pdf->SetXY(18, 48.5);
-        $pdf->Cell(18, 9, self::initials((string) $participant['name']), 0, 0, 'C');
+        $pdf->SetFont('Helvetica', 'B', 15);
+        $pdf->SetTextColor(31, 46, 77);
+        $pdf->SetXY(self::NAME_X, self::NAME_Y);
+        $pdf->Cell(self::NAME_W, self::NAME_H, strtoupper(self::truncate((string) $participant['name'], 32)), 0, 0, 'C');
 
-        $pdf->SetTextColor(12, 12, 14);
-        $pdf->SetFont('Arial', 'B', 15);
-        $pdf->SetXY(44, 40);
-        $pdf->MultiCell(46, 7, self::truncateAscii((string) $participant['name'], 36), 0, 'L');
+        $pdf->SetFont('Helvetica', 'B', 10);
+        $pdf->SetXY(12, 108);
+        $pdf->Cell(20, 5, 'ID No', 0, 0, 'L');
+        $pdf->SetXY(12, 114);
+        $pdf->Cell(20, 5, 'Email', 0, 0, 'L');
+        $pdf->SetXY(12, 120);
+        $pdf->Cell(20, 5, 'Phone', 0, 0, 'L');
+        $pdf->SetXY(28, 108);
+        $pdf->Cell(5, 5, ':', 0, 0, 'L');
+        $pdf->SetXY(28, 114);
+        $pdf->Cell(5, 5, ':', 0, 0, 'L');
+        $pdf->SetXY(28, 120);
+        $pdf->Cell(5, 5, ':', 0, 0, 'L');
 
-        $pdf->SetFont('Arial', '', 9);
-        $pdf->SetTextColor(63, 63, 70);
-        $pdf->SetXY(44, 55);
-        $pdf->MultiCell(46, 5, self::truncateAscii(self::participantSubtitle($participant), 56), 0, 'L');
+        $pdf->SetFont('Helvetica', '', 8);
+        $pdf->SetTextColor(35, 49, 76);
+        $plainId = ($participant['participant_type'] ?? '') === 'internal'
+            ? self::truncate((string) ($participant['vit_reg_no'] ?? 'N/A'), 22)
+            : self::truncate((string) ($participant['barcode_uid'] ?? 'N/A'), 22);
+        $pdf->SetXY(self::ID_VALUE_X, self::ID_VALUE_Y);
+        $pdf->Cell(self::ID_VALUE_W, self::ID_VALUE_H, $plainId, 0, 0, 'L');
+        $pdf->SetXY(self::EMAIL_VALUE_X, self::EMAIL_VALUE_Y);
+        $pdf->SetFont('Helvetica', '', 6.2);
+        $pdf->Cell(self::EMAIL_VALUE_W, self::EMAIL_VALUE_H, trim((string) ($participant['email'] ?? 'N/A')), 0, 0, 'L');
+        $pdf->SetXY(self::PHONE_VALUE_X, self::PHONE_VALUE_Y);
+        $pdf->SetFont('Helvetica', '', 8);
+        $pdf->Cell(self::PHONE_VALUE_W, self::PHONE_VALUE_H, self::truncate((string) ($participant['phone'] ?? 'N/A'), 18), 0, 0, 'L');
 
-        $pdf->Image($qrPath, 27.5, 74, 50, 50, 'PNG');
-        $pdf->Code128(22, 127, (string) $participant['barcode_uid'], 60, 10);
-        $pdf->SetFont('Arial', '', 8);
-        $pdf->SetTextColor(63, 63, 70);
-        $pdf->SetXY(15, 139);
-        $pdf->Cell(75, 4, 'Scan QR at venue for check-in', 0, 0, 'C');
-
-        $pdf->Output('F', $pdfPath);
-
-        $updateStmt = $pdo->prepare('UPDATE participants SET id_card_path = ? WHERE id = ?');
-        $updateStmt->execute([self::relativeUploadPath($participant['hackathon_id'], $participant['id']), $participantId]);
-
-        if (file_exists($qrPath)) {
-            unlink($qrPath);
+        $qrPath = self::generateQRPng(
+            rtrim(APP_URL, '/') . '/public/verify-cert.php?type=checkin&token=' . urlencode((string) $participant['qr_token']),
+            (int) $participant['id']
+        );
+        if ($qrPath !== null) {
+            $pdf->Image($qrPath, self::QR_X, self::QR_Y, self::QR_SIZE, self::QR_SIZE, 'PNG');
+            @unlink($qrPath);
         }
 
-        return $pdfPath;
+        $barcodePath = self::generateBarcodePng((string) $participant['barcode_uid'], (int) $participant['id']);
+        if ($barcodePath !== null) {
+            $pdf->Rect(self::BARCODE_X, self::BARCODE_Y, self::BARCODE_W, self::BARCODE_H, 'D');
+            $pdf->Image($barcodePath, self::BARCODE_X, self::BARCODE_Y, self::BARCODE_W, self::BARCODE_H, 'PNG');
+            @unlink($barcodePath);
+        }
+
+        $pdf->Output('F', $savePath);
+        self::updateIdCardPath((int) $participant['id'], (int) $participant['hackathon_id']);
+
+        return $savePath;
     }
 
-    private static function generateQrImage(string $token, string $outputPath): void
+    private static function savePath(array $participant): string
     {
-        $data = APP_URL . '/public/verify-cert.php?type=checkin&token=' . urlencode($token);
+        $directory = dirname(__DIR__) . '/uploads/id-cards/' . (int) $participant['hackathon_id'];
+        ensureDirectory($directory);
+
+        return $directory . '/' . (int) $participant['id'] . '.pdf';
+    }
+
+    private static function updateIdCardPath(int $participantId, int $hackathonId): void
+    {
+        $pdo = Database::getConnection();
+        $stmt = $pdo->prepare('UPDATE participants SET id_card_path = ? WHERE id = ?');
+        $stmt->execute(['uploads/id-cards/' . $hackathonId . '/' . $participantId . '.pdf', $participantId]);
+    }
+
+    private static function validatedTemplatePath(string $relativePath): ?string
+    {
+        $templateRoot = realpath(dirname(__DIR__) . '/templates');
+        if ($templateRoot === false) {
+            return null;
+        }
+
+        $candidate = realpath(dirname(__DIR__) . '/' . ltrim($relativePath, '/'));
+        if ($candidate === false || !is_file($candidate)) {
+            return null;
+        }
+
+        $normalizedRoot = rtrim($templateRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+
+        return str_starts_with($candidate, $normalizedRoot) ? $candidate : null;
+    }
+
+    private static function getInitialsCirclePng(string $name, int $size): string
+    {
+        $path = sys_get_temp_dir() . '/hd_initials_' . md5($name . microtime(true)) . '.png';
+        $image = imagecreatetruecolor($size, $size);
+        if ($image === false) {
+            throw new RuntimeException('Unable to prepare ID card avatar image.');
+        }
+
+        imagealphablending($image, false);
+        imagesavealpha($image, true);
+        $transparent = imagecolorallocatealpha($image, 0, 0, 0, 127);
+        imagefill($image, 0, 0, $transparent);
+
+        [$r, $g, $b] = self::paletteColor($name);
+        $circleColor = imagecolorallocate($image, $r, $g, $b);
+        $textColor = imagecolorallocate($image, 255, 255, 255);
+        imagefilledellipse($image, (int) ($size / 2), (int) ($size / 2), $size - 4, $size - 4, $circleColor);
+
+        $initials = self::initials($name);
+        $fontPath = self::fontPath();
+        if ($fontPath !== null) {
+            $fontSize = (int) max(18, round($size * 0.24));
+            $bbox = imagettfbbox($fontSize, 0, $fontPath, $initials) ?: [0, 0, 0, 0, 0, 0, 0, 0];
+            $textWidth = (int) abs($bbox[4] - $bbox[0]);
+            $textHeight = (int) abs($bbox[5] - $bbox[1]);
+            $x = (int) (($size - $textWidth) / 2);
+            $y = (int) (($size + $textHeight) / 2) - 6;
+            imagettftext($image, $fontSize, 0, $x, $y, $textColor, $fontPath, $initials);
+        } else {
+            $font = 5;
+            $textWidth = imagefontwidth($font) * strlen($initials);
+            $textHeight = imagefontheight($font);
+            imagestring($image, $font, (int) (($size - $textWidth) / 2), (int) (($size - $textHeight) / 2), $initials, $textColor);
+        }
+
+        imagepng($image, $path);
+        imagedestroy($image);
+
+        return $path;
+    }
+
+    private static function generateQRPng(string $content, int $participantId): ?string
+    {
+        $path = sys_get_temp_dir() . '/hd_qr_' . $participantId . '_' . bin2hex(random_bytes(4)) . '.png';
         $options = new QROptions([
             'outputType' => QRCode::OUTPUT_IMAGE_PNG,
             'scale' => 6,
         ]);
+        $data = (new QRCode($options))->render($content);
 
-        $pngData = (new QRCode($options))->render($data);
-        if (str_starts_with($pngData, 'data:image/png;base64,')) {
-            $decoded = base64_decode(substr($pngData, strlen('data:image/png;base64,')), true);
+        if (str_starts_with($data, 'data:image/png;base64,')) {
+            $decoded = base64_decode(substr($data, strlen('data:image/png;base64,')), true);
             if ($decoded === false) {
-                throw new RuntimeException('Unable to decode QR image data.');
+                return null;
             }
-            $pngData = $decoded;
+            $data = $decoded;
         }
 
-        if (file_put_contents($outputPath, $pngData) === false) {
-            throw new RuntimeException('Unable to write QR image for ID card.');
-        }
+        return file_put_contents($path, $data) === false ? null : $path;
     }
 
-    private static function participantSubtitle(array $participant): string
+    private static function generateBarcodePng(string $uid, int $participantId): ?string
     {
-        if (($participant['participant_type'] ?? '') === 'internal') {
-            return trim(($participant['department'] ?? 'VIT Student') . ' | ' . ($participant['vit_reg_no'] ?? 'VIT Student'));
+        $value = trim($uid);
+        if ($value === '') {
+            return null;
         }
 
-        return trim(($participant['college'] ?? 'External Participant') . ' | ' . ($participant['department'] ?? 'Department'));
+        $generator = new BarcodeGeneratorPNG();
+        $path = sys_get_temp_dir() . '/hd_barcode_' . $participantId . '_' . bin2hex(random_bytes(4)) . '.png';
+        $png = $generator->getBarcode($value, $generator::TYPE_CODE_128, 2, 60);
+
+        return file_put_contents($path, $png) === false ? null : $path;
     }
 
     private static function initials(string $name): string
@@ -162,139 +368,51 @@ final class IDCard
         $parts = preg_split('/\s+/', trim($name)) ?: [];
         $initials = '';
 
-        foreach (array_slice($parts, 0, 2) as $part) {
+        foreach (array_slice(array_values(array_filter($parts, static fn(string $part): bool => $part !== '')), 0, 2) as $part) {
             $initials .= strtoupper(substr($part, 0, 1));
         }
 
         return $initials !== '' ? $initials : 'HD';
     }
 
+    private static function paletteColor(string $seed): array
+    {
+        $palette = [
+            [91, 91, 214],
+            [37, 99, 235],
+            [8, 145, 178],
+            [124, 58, 237],
+            [22, 163, 74],
+        ];
+
+        return $palette[abs(crc32($seed)) % count($palette)];
+    }
+
+    private static function fontPath(): ?string
+    {
+        $candidates = [
+            dirname(__DIR__) . '/public/assets/fonts/Inter-Bold.ttf',
+            'C:/Windows/Fonts/arialbd.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
     private static function truncate(string $text, int $maxLength): string
     {
-        return mb_strlen($text) > $maxLength ? mb_substr($text, 0, $maxLength - 1) . '…' : $text;
-    }
+        $value = trim($text);
 
-    private static function truncateAscii(string $text, int $maxLength): string
-    {
-        return mb_strlen($text) > $maxLength ? mb_substr($text, 0, $maxLength - 3) . '...' : $text;
-    }
-
-    private static function relativeUploadPath(int|string $hackathonId, int|string $participantId): string
-    {
-        return 'uploads/id-cards/' . (int) $hackathonId . '/' . (int) $participantId . '.pdf';
+        return mb_strlen($value) > $maxLength ? mb_substr($value, 0, $maxLength - 3) . '...' : $value;
     }
 
     private function __construct()
     {
-    }
-}
-
-class HackDeskPDF extends FPDF
-{
-    private const T128 = [];
-
-    public function Circle(float $x, float $y, float $r, string $style = 'D'): void
-    {
-        $this->Ellipse($x, $y, $r, $r, $style);
-    }
-
-    public function Ellipse(float $x, float $y, float $rx, float $ry, string $style = 'D'): void
-    {
-        $op = match ($style) {
-            'F' => 'f',
-            'FD', 'DF' => 'B',
-            default => 'S',
-        };
-
-        $lx = 4 / 3 * (sqrt(2) - 1) * $rx;
-        $ly = 4 / 3 * (sqrt(2) - 1) * $ry;
-        $k = $this->k;
-        $h = $this->h;
-
-        $this->_out(sprintf('%.2F %.2F m', ($x + $rx) * $k, ($h - $y) * $k));
-        $this->_Arc($x + $rx, $y - $ly, $x + $lx, $y - $ry, $x, $y - $ry);
-        $this->_Arc($x - $lx, $y - $ry, $x - $rx, $y - $ly, $x - $rx, $y);
-        $this->_Arc($x - $rx, $y + $ly, $x - $lx, $y + $ry, $x, $y + $ry);
-        $this->_Arc($x + $lx, $y + $ry, $x + $rx, $y + $ly, $x + $rx, $y);
-        $this->_out($op);
-    }
-
-    public function Code128(float $x, float $y, string $code, float $w, float $h): void
-    {
-        $codes = self::patterns();
-        $start = 104;
-        $checksum = $start;
-        $encoded = chr($start);
-
-        for ($i = 0; $i < strlen($code); $i++) {
-            $value = ord($code[$i]) - 32;
-            if ($value < 0 || $value > 94) {
-                $value = 0;
-            }
-
-            $checksum += $value * ($i + 1);
-            $encoded .= chr($value);
-        }
-
-        $encoded .= chr($checksum % 103) . chr(106) . chr(107);
-
-        $modules = '';
-        for ($i = 0; $i < strlen($encoded); $i++) {
-            $modules .= $codes[ord($encoded[$i])];
-        }
-
-        $moduleWidth = $w / strlen($modules);
-        for ($i = 0; $i < strlen($modules); $i++) {
-            if ($modules[$i] === '1') {
-                $this->Rect($x + $i * $moduleWidth, $y, $moduleWidth, $h, 'F');
-            }
-        }
-
-        $this->SetFont('Arial', '', 8);
-        $this->SetTextColor(12, 12, 14);
-        $this->SetXY($x, $y + $h + 1);
-        $this->Cell($w, 4, $code, 0, 0, 'C');
-    }
-
-    private function _Arc(float $x1, float $y1, float $x2, float $y2, float $x3, float $y3): void
-    {
-        $h = $this->h;
-        $this->_out(sprintf(
-            '%.2F %.2F %.2F %.2F %.2F %.2F c',
-            $x1 * $this->k,
-            ($h - $y1) * $this->k,
-            $x2 * $this->k,
-            ($h - $y2) * $this->k,
-            $x3 * $this->k,
-            ($h - $y3) * $this->k
-        ));
-    }
-
-    private static function patterns(): array
-    {
-        return [
-            0 => '11011001100', 1 => '11001101100', 2 => '11001100110', 3 => '10010011000', 4 => '10010001100',
-            5 => '10001001100', 6 => '10011001000', 7 => '10011000100', 8 => '10001100100', 9 => '11001001000',
-            10 => '11001000100', 11 => '11000100100', 12 => '10110011100', 13 => '10011011100', 14 => '10011001110',
-            15 => '10111001100', 16 => '10011101100', 17 => '10011100110', 18 => '11001110010', 19 => '11001011100',
-            20 => '11001001110', 21 => '11011100100', 22 => '11001110100', 23 => '11101101110', 24 => '11101001100',
-            25 => '11100101100', 26 => '11100100110', 27 => '11101100100', 28 => '11100110100', 29 => '11100110010',
-            30 => '11011011000', 31 => '11011000110', 32 => '11000110110', 33 => '10100011000', 34 => '10001011000',
-            35 => '10001000110', 36 => '10110001000', 37 => '10001101000', 38 => '10001100010', 39 => '11010001000',
-            40 => '11000101000', 41 => '11000100010', 42 => '10110111000', 43 => '10110001110', 44 => '10001101110',
-            45 => '10111011000', 46 => '10111000110', 47 => '10001110110', 48 => '11101110110', 49 => '11010001110',
-            50 => '11000101110', 51 => '11011101000', 52 => '11011100010', 53 => '11011101110', 54 => '11101011000',
-            55 => '11101000110', 56 => '11100010110', 57 => '11101101000', 58 => '11101100010', 59 => '11100011010',
-            60 => '11101111010', 61 => '11001000010', 62 => '11110001010', 63 => '10100110000', 64 => '10100001100',
-            65 => '10010110000', 66 => '10010000110', 67 => '10000101100', 68 => '10000100110', 69 => '10110010000',
-            70 => '10110000100', 71 => '10011010000', 72 => '10011000010', 73 => '10000110100', 74 => '10000110010',
-            75 => '11000010010', 76 => '11001010000', 77 => '11110111010', 78 => '11000010100', 79 => '10001111010',
-            80 => '10100111100', 81 => '10010111100', 82 => '10010011110', 83 => '10111100100', 84 => '10011110100',
-            85 => '10011110010', 86 => '11110100100', 87 => '11110010100', 88 => '11110010010', 89 => '11011011110',
-            90 => '11011110110', 91 => '11110110110', 92 => '10101111000', 93 => '10100011110', 94 => '10001011110',
-            95 => '10111101000', 96 => '10111100010', 97 => '11110101000', 98 => '11110100010', 99 => '10111011110',
-            100 => '10111101110', 101 => '11101011110', 102 => '11110101110', 103 => '11010000100',
-            104 => '11010010000', 105 => '11010011100', 106 => '11000111010', 107 => '11',
-        ];
     }
 }
