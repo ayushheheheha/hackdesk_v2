@@ -35,6 +35,11 @@ $otpEmail = trim((string) ($_POST['email'] ?? $_GET['email'] ?? ''));
 $otpRequested = false;
 $otpVerified = false;
 $otpError = null;
+$registrationChoices = [];
+
+if ($otpEmail !== '' && filter_var($otpEmail, FILTER_VALIDATE_EMAIL)) {
+    $registrationChoices = ParticipantAuth::findRegistrationsForEmail($otpEmail, $selectedType);
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
@@ -46,18 +51,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($otpEmail === '' || !filter_var($otpEmail, FILTER_VALIDATE_EMAIL)) {
                 $otpError = 'Enter a valid participant email address.';
             } else {
-                $otpRequested = ParticipantAuth::sendOtpForEmail($otpEmail, $hackathonId ?: null, $selectedType);
-                if (!$otpRequested) {
-                    $otpError = 'We could not send a login code for that participant email. Check the student type, event link, and email address.';
+                if ($hackathonId === null && count($registrationChoices) > 1) {
+                    $otpError = 'This email is registered for multiple hackathons. Choose the event you want to sign in to first.';
+                } else {
+                    $otpRequested = ParticipantAuth::sendOtpForEmail($otpEmail, $hackathonId ?: null, $selectedType);
+                    if (!$otpRequested) {
+                        $otpError = 'We could not send a login code for that participant email. Check the student type, event link, and email address.';
+                    }
                 }
             }
         }
 
         if ($action === 'verify_otp') {
             $otpCode = trim((string) ($_POST['otp_code'] ?? ''));
-            $otpVerified = ParticipantAuth::loginWithOtp($otpEmail, $otpCode, $hackathonId ?: null, $selectedType);
-            if (!$otpVerified) {
-                $otpError = 'The OTP is invalid, expired, or has already been used.';
+            if ($hackathonId === null && count($registrationChoices) > 1) {
+                $otpError = 'Choose the hackathon you want to access before verifying the OTP.';
+            } else {
+                $otpVerified = ParticipantAuth::loginWithOtp($otpEmail, $otpCode, $hackathonId ?: null, $selectedType);
+                if (!$otpVerified) {
+                    $otpError = 'The OTP is invalid, expired, or has already been used.';
+                }
             }
         }
     }
@@ -116,6 +129,46 @@ require_once __DIR__ . '/../includes/header.php';
 
         <?php if ($otpRequested && !$otpVerified): ?>
             <div class="flash flash-success" style="margin-top:18px;">A login code has been sent to your email.</div>
+        <?php endif; ?>
+
+        <?php if (!$otpVerified && count($registrationChoices) > 1 && $hackathonId === null): ?>
+            <div class="card" style="margin-top:18px;background:var(--surface-alt);">
+                <h3>Choose Your Hackathon</h3>
+                <p class="page-subtitle" style="margin-top:10px;">This email is registered for multiple events. Pick the hackathon you want to access, then send or verify the OTP for that event.</p>
+                <div class="table-shell" style="margin-top:18px;">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Hackathon</th>
+                            <th>Date</th>
+                            <th>Venue</th>
+                            <th>Type</th>
+                            <th>Action</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($registrationChoices as $choice): ?>
+                            <?php
+                            $choiceParams = array_filter([
+                                'h' => (int) $choice['hackathon_id'],
+                                'type' => $selectedType,
+                                'email' => $otpEmail,
+                            ], static fn($value): bool => $value !== null && $value !== '');
+                            ?>
+                            <tr>
+                                <td><?= e((string) $choice['hackathon_name']) ?></td>
+                                <td><?= e(formatUtcToIst((string) $choice['starts_at'], 'd M Y')) ?></td>
+                                <td><?= e((string) ($choice['venue'] ?? 'TBA')) ?></td>
+                                <td><?= e(ucfirst((string) $choice['participant_type'])) ?></td>
+                                <td><a class="btn-ghost" href="<?= e(appPath('public/participant-login.php?' . http_build_query($choiceParams))) ?>">Use This Event</a></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        <?php elseif ($hackathon !== null && count($registrationChoices) > 1): ?>
+            <div class="flash flash-warning" style="margin-top:18px;">You are signing in specifically for this hackathon. Need a different event? Go back and choose another registration.</div>
         <?php endif; ?>
 
         <?php if ($otpVerified): ?>

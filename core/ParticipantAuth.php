@@ -7,6 +7,44 @@ require_once __DIR__ . '/helpers.php';
 
 final class ParticipantAuth
 {
+    public static function findRegistrationsForEmail(string $email, ?string $participantType = null): array
+    {
+        $normalizedEmail = strtolower(trim($email));
+        if ($normalizedEmail === '') {
+            return [];
+        }
+
+        $pdo = Database::getConnection();
+        $where = ['LOWER(p.email) = ?'];
+        $params = [$normalizedEmail];
+        $normalizedType = normalizeParticipantType($participantType);
+
+        if ($normalizedType !== null) {
+            $where[] = 'p.participant_type = ?';
+            $params[] = $normalizedType;
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT
+                p.id,
+                p.name,
+                p.email,
+                p.hackathon_id,
+                p.participant_type,
+                p.registered_at,
+                h.name AS hackathon_name,
+                h.venue,
+                h.starts_at
+             FROM participants p
+             INNER JOIN hackathons h ON h.id = p.hackathon_id
+             WHERE ' . implode(' AND ', $where) . '
+             ORDER BY h.starts_at DESC, p.registered_at DESC, p.id DESC'
+        );
+        $stmt->execute($params);
+
+        return $stmt->fetchAll();
+    }
+
     public static function loginParticipant(int $participantId, int $hackathonId): void
     {
         session_regenerate_id(true);
@@ -53,44 +91,8 @@ final class ParticipantAuth
     {
         require_once __DIR__ . '/Mailer.php';
 
-        $normalizedEmail = strtolower(trim($email));
-        if ($normalizedEmail === '') {
-            return false;
-        }
-
-        $pdo = Database::getConnection();
-        $where = ['p.email = ?'];
-        $params = [$normalizedEmail];
-
-        $normalizedType = normalizeParticipantType($participantType);
-        if ($hackathonId !== null) {
-            $where[] = 'p.hackathon_id = ?';
-            $params[] = $hackathonId;
-        }
-
-        if ($normalizedType !== null) {
-            $where[] = 'p.participant_type = ?';
-            $params[] = $normalizedType;
-        }
-
-        $stmt = $pdo->prepare(
-            'SELECT
-                p.id,
-                p.name,
-                p.email,
-                p.hackathon_id,
-                p.participant_type,
-                h.name AS hackathon_name
-             FROM participants p
-             INNER JOIN hackathons h ON h.id = p.hackathon_id
-             WHERE ' . implode(' AND ', $where) . '
-             ORDER BY p.registered_at DESC, p.id DESC
-             LIMIT 1'
-        );
-        $stmt->execute($params);
-        $participant = $stmt->fetch();
-
-        if ($participant === false) {
+        $participant = self::findParticipantForEmail($email, $hackathonId, $participantType);
+        if ($participant === null) {
             return false;
         }
 
@@ -101,27 +103,14 @@ final class ParticipantAuth
 
     public static function loginWithOtp(string $email, string $otpCode, ?int $hackathonId = null, ?string $participantType = null): bool
     {
-        $normalizedEmail = strtolower(trim($email));
         $otpCode = trim($otpCode);
 
-        if ($normalizedEmail === '' || $otpCode === '' || !preg_match('/^\d{6}$/', $otpCode)) {
+        $participant = self::findParticipantForEmail($email, $hackathonId, $participantType);
+        if ($participant === null || $otpCode === '' || !preg_match('/^\d{6}$/', $otpCode)) {
             return false;
         }
 
         $pdo = Database::getConnection();
-        $where = ['po.email = ?'];
-        $params = [$normalizedEmail];
-        $normalizedType = normalizeParticipantType($participantType);
-
-        if ($hackathonId !== null) {
-            $where[] = 'p.hackathon_id = ?';
-            $params[] = $hackathonId;
-        }
-
-        if ($normalizedType !== null) {
-            $where[] = 'p.participant_type = ?';
-            $params[] = $normalizedType;
-        }
 
         $stmt = $pdo->prepare(
             'SELECT
@@ -134,11 +123,11 @@ final class ParticipantAuth
                 p.hackathon_id
              FROM participant_otps po
              INNER JOIN participants p ON p.id = po.participant_id
-             WHERE ' . implode(' AND ', $where) . '
+             WHERE po.email = ? AND po.participant_id = ?
              ORDER BY po.created_at DESC, po.id DESC
              LIMIT 1'
         );
-        $stmt->execute($params);
+        $stmt->execute([strtolower(trim((string) $participant['email'])), (int) $participant['id']]);
         $otp = $stmt->fetch();
 
         if ($otp === false || $otp['verified_at'] !== null || $otp['consumed_at'] !== null) {
@@ -163,6 +152,26 @@ final class ParticipantAuth
         self::loginParticipant((int) $otp['participant_id'], (int) $otp['hackathon_id']);
 
         return true;
+    }
+
+    private static function findParticipantForEmail(string $email, ?int $hackathonId = null, ?string $participantType = null): ?array
+    {
+        $matches = self::findRegistrationsForEmail($email, $participantType);
+        if ($matches === []) {
+            return null;
+        }
+
+        if ($hackathonId !== null) {
+            foreach ($matches as $match) {
+                if ((int) $match['hackathon_id'] === $hackathonId) {
+                    return $match;
+                }
+            }
+
+            return null;
+        }
+
+        return count($matches) === 1 ? $matches[0] : null;
     }
 
     public static function check(): bool
