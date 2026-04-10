@@ -1,20 +1,20 @@
 :root {
-    --primary: #5B5BD6;
-    --primary-hover: #4F4FBF;
-    --bg: #0C0C0E;
-    --bg-surface: #131316;
-    --bg-hover: #1C1C20;
-    --border: #27272A;
-    --border-hover: #3F3F46;
-    --text: #FAFAFA;
-    --text-muted: #71717A;
-    --text-subtle: #3F3F46;
+    --primary: #1F2A44;
+    --primary-hover: #2B3759;
+    --bg: #f3efe6;
+    --bg-surface: #fcfaf5;
+    --bg-hover: #f2ebde;
+    --border: #d8cfbf;
+    --border-hover: #bfb39f;
+    --text: #25221d;
+    --text-muted: #6f6557;
+    --text-subtle: #998f80;
     --radius: 8px;
     --radius-lg: 12px;
     --transition: 0.15s ease;
-    --success: #4ADE80;
-    --warning: #FBBF24;
-    --danger: #F87171;
+    --success: #1f7a43;
+    --warning: #9b6700;
+    --danger: #9d2f2f;
 }
 
 * {
@@ -22,12 +22,15 @@
 }
 
 html {
-    color-scheme: dark;
+    color-scheme: light;
 }
 
 body {
     margin: 0;
-    background: var(--bg);
+    background:
+        radial-gradient(circle at top right, rgba(31, 42, 68, 0.06), transparent 36%),
+        radial-gradient(circle at left -20%, rgba(174, 149, 111, 0.08), transparent 28%),
+        var(--bg);
     color: var(--text);
     font: 14px/1.5 'Inter', sans-serif;
     animation: fadeIn 0.2s ease;
@@ -85,7 +88,7 @@ p {
 }
 
 .btn-ghost {
-    background: transparent;
+    background: rgba(255, 255, 255, 0.45);
     border: 1px solid var(--border);
     color: var(--text-muted);
 }
@@ -111,7 +114,7 @@ textarea {
     padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    background: var(--bg);
+    background: var(--bg-surface);
     color: var(--text);
     font: inherit;
     transition: border-color var(--transition), background var(--transition);
@@ -147,14 +150,14 @@ label {
 
 .flash-success {
     color: var(--success);
-    background: rgba(74, 222, 128, 0.08);
-    border-color: rgba(74, 222, 128, 0.2);
+    background: rgba(31, 122, 67, 0.08);
+    border-color: rgba(31, 122, 67, 0.2);
 }
 
 .flash-error {
     color: var(--danger);
-    background: rgba(248, 113, 113, 0.08);
-    border-color: rgba(248, 113, 113, 0.2);
+    background: rgba(157, 47, 47, 0.08);
+    border-color: rgba(157, 47, 47, 0.2);
 }
 
 .sidebar {
@@ -164,7 +167,7 @@ label {
     width: 200px;
     height: 100vh;
     overflow-y: auto;
-    background: var(--bg);
+    background: #ede5d6;
     border-right: 1px solid var(--border);
 }
 
@@ -198,7 +201,7 @@ label {
 }
 
 .sidebar-link.active {
-    background: var(--bg-surface);
+    background: #f8f3e9;
     color: var(--text);
     font-weight: 500;
 }
@@ -231,10 +234,10 @@ label {
     align-items: center;
     gap: 8px;
     padding: 6px 10px;
-    border: 1px solid rgba(91, 91, 214, 0.35);
+    border: 1px solid rgba(31, 42, 68, 0.24);
     border-radius: 999px;
-    color: #C7D2FE;
-    background: rgba(91, 91, 214, 0.08);
+    color: #2b3759;
+    background: rgba(31, 42, 68, 0.08);
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -280,9 +283,9 @@ label {
     width: 50px;
     height: 50px;
     border-radius: 14px;
-    background: linear-gradient(135deg, rgba(91, 91, 214, 0.22), rgba(91, 91, 214, 0.08));
-    border: 1px solid rgba(91, 91, 214, 0.28);
-    color: #C7D2FE;
+    background: rgba(31, 42, 68, 0.1);
+    border: 1px solid rgba(31, 42, 68, 0.2);
+    color: #2b3759;
 }
 
 .landing-card-icon svg {
@@ -397,7 +400,7 @@ label {
 code {
     padding: 2px 6px;
     border-radius: 6px;
-    background: var(--bg);
+    background: #f5f0e6;
     border: 1px solid var(--border);
     color: var(--text);
     font-family: Consolas, monospace;
@@ -437,17 +440,17 @@ tr:hover td {
 
 .badge-success {
     color: var(--success);
-    background: rgba(74, 222, 128, 0.08);
+    background: rgba(31, 122, 67, 0.1);
 }
 
 .badge-warning {
     color: var(--warning);
-    background: rgba(251, 191, 36, 0.08);
+    background: rgba(155, 103, 0, 0.1);
 }
 
 .badge-danger {
     color: var(--danger);
-    background: rgba(248, 113, 113, 0.08);
+    background: rgba(157, 47, 47, 0.1);
 }
 
 .badge-muted {
