@@ -36,12 +36,25 @@ $error = getFlash('error');
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?= e(APP_NAME) ?> Login</title>
+    <script>
+        (function () {
+            try {
+                var savedTheme = localStorage.getItem('hackdesk_theme');
+                if (savedTheme === 'dark' || savedTheme === 'light') {
+                    document.documentElement.setAttribute('data-theme', savedTheme);
+                }
+            } catch (error) {
+                // Ignore theme storage errors.
+            }
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?= e(appPath('public/assets/css/style.css')) ?>">
 </head>
 <body class="login-body">
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle color theme"></button>
 <main class="auth-shell">
     <div class="auth-wordmark"><?= e(APP_NAME) ?></div>
     <section class="card auth-card">

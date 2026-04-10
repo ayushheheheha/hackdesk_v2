@@ -15,6 +15,34 @@
     --success: #1f7a43;
     --warning: #9b6700;
     --danger: #9d2f2f;
+    --sidebar-bg: #ede5d6;
+    --sidebar-active: #f8f3e9;
+    --code-bg: #f5f0e6;
+    --spot-one: rgba(31, 42, 68, 0.06);
+    --spot-two: rgba(174, 149, 111, 0.08);
+    --theme-toggle-bg: rgba(252, 250, 245, 0.94);
+}
+
+:root[data-theme='dark'] {
+    --primary: #5B5BD6;
+    --primary-hover: #4F4FBF;
+    --bg: #0C0C0E;
+    --bg-surface: #131316;
+    --bg-hover: #1C1C20;
+    --border: #27272A;
+    --border-hover: #3F3F46;
+    --text: #FAFAFA;
+    --text-muted: #71717A;
+    --text-subtle: #3F3F46;
+    --success: #4ADE80;
+    --warning: #FBBF24;
+    --danger: #F87171;
+    --sidebar-bg: #0C0C0E;
+    --sidebar-active: #131316;
+    --code-bg: #0C0C0E;
+    --spot-one: transparent;
+    --spot-two: transparent;
+    --theme-toggle-bg: rgba(19, 19, 22, 0.95);
 }
 
 * {
@@ -25,15 +53,23 @@ html {
     color-scheme: light;
 }
 
+html[data-theme='dark'] {
+    color-scheme: dark;
+}
+
 body {
     margin: 0;
     background:
-        radial-gradient(circle at top right, rgba(31, 42, 68, 0.06), transparent 36%),
-        radial-gradient(circle at left -20%, rgba(174, 149, 111, 0.08), transparent 28%),
+        radial-gradient(circle at top right, var(--spot-one), transparent 36%),
+        radial-gradient(circle at left -20%, var(--spot-two), transparent 28%),
         var(--bg);
     color: var(--text);
     font: 14px/1.5 'Inter', sans-serif;
     animation: fadeIn 0.2s ease;
+}
+
+html[data-theme='dark'] body {
+    background: var(--bg);
 }
 
 a {
@@ -88,9 +124,13 @@ p {
 }
 
 .btn-ghost {
-    background: rgba(255, 255, 255, 0.45);
+    background: var(--bg-surface);
     border: 1px solid var(--border);
     color: var(--text-muted);
+}
+
+html[data-theme='dark'] .btn-ghost {
+    background: transparent;
 }
 
 .btn-ghost:hover {
@@ -118,6 +158,12 @@ textarea {
     color: var(--text);
     font: inherit;
     transition: border-color var(--transition), background var(--transition);
+}
+
+html[data-theme='dark'] input,
+html[data-theme='dark'] select,
+html[data-theme='dark'] textarea {
+    background: var(--bg);
 }
 
 input:focus,
@@ -173,7 +219,7 @@ label {
     width: 200px;
     height: 100vh;
     overflow-y: auto;
-    background: #ede5d6;
+    background: var(--sidebar-bg);
     border-right: 1px solid var(--border);
 }
 
@@ -207,7 +253,7 @@ label {
 }
 
 .sidebar-link.active {
-    background: #f8f3e9;
+    background: var(--sidebar-active);
     color: var(--text);
     font-weight: 500;
 }
@@ -247,6 +293,12 @@ label {
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
+}
+
+html[data-theme='dark'] .landing-kicker {
+    border: 1px solid rgba(91, 91, 214, 0.35);
+    color: #C7D2FE;
+    background: rgba(91, 91, 214, 0.08);
 }
 
 .landing-copy h1 {
@@ -292,6 +344,12 @@ label {
     background: rgba(31, 42, 68, 0.1);
     border: 1px solid rgba(31, 42, 68, 0.2);
     color: #2b3759;
+}
+
+html[data-theme='dark'] .landing-card-icon {
+    background: linear-gradient(135deg, rgba(91, 91, 214, 0.22), rgba(91, 91, 214, 0.08));
+    border: 1px solid rgba(91, 91, 214, 0.28);
+    color: #C7D2FE;
 }
 
 .landing-card-icon svg {
@@ -406,7 +464,7 @@ label {
 code {
     padding: 2px 6px;
     border-radius: 6px;
-    background: #f5f0e6;
+    background: var(--code-bg);
     border: 1px solid var(--border);
     color: var(--text);
     font-family: Consolas, monospace;
@@ -464,6 +522,47 @@ tr:hover td {
     background: var(--bg-hover);
 }
 
+.theme-toggle {
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    z-index: 1100;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--theme-toggle-bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition), color var(--transition), transform var(--transition);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.theme-toggle:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
+}
+
+.theme-toggle:active {
+    transform: scale(0.97);
+}
+
+.theme-toggle svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
 @keyframes fadeIn {
     from { opacity: 0; }
     to { opacity: 1; }
@@ -505,5 +604,10 @@ tr:hover td {
     .landing-hero,
     .landing-grid {
         grid-template-columns: 1fr;
+    }
+
+    .theme-toggle {
+        top: 10px;
+        right: 10px;
     }
 }

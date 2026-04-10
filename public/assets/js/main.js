@@ -48,7 +48,73 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
+function getStoredTheme() {
+    try {
+        const stored = localStorage.getItem('hackdesk_theme');
+        if (stored === 'dark' || stored === 'light') {
+            return stored;
+        }
+    } catch (error) {
+        // Ignore storage errors.
+    }
+    return null;
+}
+
+function getThemeIcon(theme) {
+    if (theme === 'dark') {
+        return `
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="12" r="4"></circle>
+                <path d="M12 2v2.5M12 19.5V22M4.93 4.93l1.77 1.77M17.3 17.3l1.77 1.77M2 12h2.5M19.5 12H22M4.93 19.07l1.77-1.77M17.3 6.7l1.77-1.77"></path>
+            </svg>
+        `;
+    }
+
+    return `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 1 0 9.8 9.8Z"></path>
+        </svg>
+    `;
+}
+
+function applyTheme(theme) {
+    const targetTheme = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', targetTheme);
+
+    try {
+        localStorage.setItem('hackdesk_theme', targetTheme);
+    } catch (error) {
+        // Ignore storage errors.
+    }
+
+    const button = document.getElementById('theme-toggle');
+    if (button) {
+        button.innerHTML = getThemeIcon(targetTheme);
+        button.setAttribute('title', targetTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+        button.setAttribute('aria-pressed', targetTheme === 'dark' ? 'true' : 'false');
+        button.setAttribute('aria-label', targetTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    }
+}
+
+function initThemeToggle() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    const savedTheme = getStoredTheme();
+    applyTheme(savedTheme || currentTheme || 'light');
+
+    const button = document.getElementById('theme-toggle');
+    if (!button) {
+        return;
+    }
+
+    button.addEventListener('click', () => {
+        const activeTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+        applyTheme(activeTheme === 'dark' ? 'light' : 'dark');
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+    initThemeToggle();
+
     document.querySelectorAll('[data-countup]').forEach((element) => {
         const target = Number(element.getAttribute('data-countup') || '0');
         const duration = 600;
