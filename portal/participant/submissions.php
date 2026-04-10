@@ -72,6 +72,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('portal/participant/submissions.php');
     }
 
+    if (!teamEligibleForRound($pdo, (int) $team['id'], (int) $round['id'])) {
+        flash('error', 'Your team is not shortlisted for this round.');
+        redirect('portal/participant/submissions.php');
+    }
+
     $deadlinePassed = isDeadlinePassed((string) $round['submission_deadline']) || $round['status'] === 'closed' || $round['status'] === 'judging_done';
     if ($deadlinePassed) {
         flash('error', 'Submissions are locked for this round.');
@@ -207,6 +212,7 @@ require_once __DIR__ . '/../../includes/header.php';
         $isUpcoming = $round['status'] === 'upcoming';
         $locked = isDeadlinePassed((string) $round['submission_deadline']) || in_array($round['status'], ['closed', 'judging_done'], true);
         $submissionStatus = $round['submission_status'] ?? null;
+        $eligibleForRound = teamEligibleForRound($pdo, (int) $team['id'], (int) $round['id']);
         ?>
         <section class="card" style="margin-bottom:24px;">
             <div class="page-header">
@@ -217,7 +223,9 @@ require_once __DIR__ . '/../../includes/header.php';
                 <span class="badge <?= $submissionStatus === 'submitted' ? 'badge-success' : 'badge-muted' ?>"><?= e((string) ($submissionStatus ?? 'not started')) ?></span>
             </div>
 
-            <?php if ($isUpcoming): ?>
+            <?php if (!$eligibleForRound): ?>
+                <p class="empty-state">Your team is not shortlisted from the previous round, so this round is locked for your team.</p>
+            <?php elseif ($isUpcoming): ?>
                 <p class="empty-state">Submissions are not open yet.</p>
             <?php elseif ($locked): ?>
                 <?php if ($submissionStatus !== null): ?>

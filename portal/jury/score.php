@@ -53,6 +53,11 @@ if ($assignment === null) {
     redirect('portal/jury/dashboard.php');
 }
 
+if (!teamEligibleForRound($pdo, (int) $assignment['team_id'], (int) $assignment['round_id'])) {
+    flash('error', 'This team is not shortlisted for the selected round.');
+    redirect('portal/jury/dashboard.php');
+}
+
 $criteria = decodeCriteria($assignment['judging_criteria'] ?? null);
 $savedScores = $assignment['criteria_scores'] !== null ? (json_decode((string) $assignment['criteria_scores'], true) ?: []) : [];
 $maxTotal = array_sum(array_map(static fn(array $criterion): float => (float) $criterion['max'], $criteria));

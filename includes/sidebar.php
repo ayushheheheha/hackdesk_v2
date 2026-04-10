@@ -36,6 +36,7 @@ $navigation = [
             'Leaderboard' => 'portal/admin/leaderboard.php',
         ],
         'Close' => [
+            'Announcements' => 'portal/admin/announcements.php',
             'Certificates' => 'portal/admin/certificates.php',
             'Reports & Export' => 'portal/admin/reports.php',
             'Settings' => 'portal/admin/settings.php',

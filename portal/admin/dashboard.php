@@ -10,6 +10,7 @@ require_once __DIR__ . '/../../core/helpers.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
+ensureOperationalTables($pdo);
 $selectedHackathonId = resolveSelectedHackathonId($pdo);
 $hackathon = null;
 if ($selectedHackathonId !== null) {
@@ -26,6 +27,7 @@ if ($selectedHackathonId !== null) {
 $stats = ['participants' => 0, 'teams' => 0, 'rounds' => 0];
 $recentParticipants = [];
 $upcomingRounds = [];
+$announcements = [];
 
 if ($hackathon !== null) {
     $statsStmt = $pdo->prepare(
@@ -55,6 +57,8 @@ if ($hackathon !== null) {
     );
     $upcomingRoundsStmt->execute([(int) $hackathon['id']]);
     $upcomingRounds = $upcomingRoundsStmt->fetchAll();
+
+    $announcements = fetchAnnouncements($pdo, (int) $hackathon['id'], 'admin', null, null);
 }
 
 $pageTitle = 'Admin Dashboard';
@@ -119,5 +123,18 @@ require_once __DIR__ . '/../../includes/header.php';
             <?php endif; ?>
         </article>
     </section>
+    <?php if ($announcements !== []): ?>
+        <section class="card" style="margin-top:24px;">
+            <h2>Announcements</h2>
+            <div style="display:grid;gap:10px;margin-top:14px;">
+                <?php foreach ($announcements as $announcement): ?>
+                    <div class="card" style="padding:14px;background:var(--bg-hover);">
+                        <strong><?= e((string) $announcement['title']) ?></strong>
+                        <p class="page-subtitle" style="margin-top:6px;"><?= e((string) $announcement['body']) ?></p>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </section>
+    <?php endif; ?>
 <?php endif; ?>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

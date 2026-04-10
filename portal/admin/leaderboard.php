@@ -81,6 +81,9 @@ require_once __DIR__ . '/../../includes/header.php';
             <input type="hidden" name="hackathon_id" value="<?= e((string) $selectedHackathonId) ?>">
             <input type="hidden" name="leaderboard_visible" value="<?= $leaderboardVisible === 1 ? '0' : '1' ?>">
             <button type="submit" class="<?= $leaderboardVisible === 1 ? 'btn-ghost' : 'btn-primary' ?>"><?= $leaderboardVisible === 1 ? 'Hide from Participants' : 'Show to Participants' ?></button>
+            <?php if ($leaderboardVisible === 1): ?>
+                <a class="btn-ghost" href="<?= e(appPath('public/leaderboard.php?h=' . (int) $selectedHackathonId)) ?>" target="_blank" rel="noopener">Open Live Public View</a>
+            <?php endif; ?>
         </form>
     </section>
 
@@ -93,7 +96,7 @@ require_once __DIR__ . '/../../includes/header.php';
                     <thead><tr><th>Rank</th><th>Team</th><th>Problem Statement</th><th>Scores by Round</th><th>Total Score</th></tr></thead>
                     <tbody>
                     <?php foreach ($rows as $index => $row): ?>
-                        <tr style="<?= $index < 3 ? 'background:rgba(91,91,214,0.08);' : '' ?>">
+                        <tr style="<?= $index < 3 ? 'background:rgba(31,42,68,0.08);' : '' ?>">
                             <td><?= e((string) ($index + 1)) ?></td>
                             <td><?= e((string) $row['team_name']) ?></td>
                             <td><?= e((string) ($row['problem_statement_title'] ?? 'Not Selected')) ?></td>

@@ -48,6 +48,14 @@ $teamStmt = $pdo->prepare(
 );
 $teamStmt->execute([(int) ($_SESSION['participant_id'] ?? 0)]);
 $team = $teamStmt->fetch();
+$teamId = $team !== false ? (int) $team['id'] : null;
+$announcements = fetchAnnouncements(
+    $pdo,
+    (int) ($participant['hackathon_id'] ?? 0),
+    'participant',
+    $teamId,
+    null
+);
 
 $certificatesStmt = $pdo->prepare(
     'SELECT
@@ -134,6 +142,21 @@ require_once __DIR__ . '/../../includes/header.php';
         <p class="page-subtitle" style="margin-top:10px;">Open your submission area for active rounds.</p>
     </a>
 </section>
+
+<?php if ($announcements !== []): ?>
+<section class="card" style="margin-top:24px;">
+    <h2>Announcements</h2>
+    <div style="display:grid;gap:10px;margin-top:12px;">
+        <?php foreach ($announcements as $announcement): ?>
+            <article class="card" style="padding:14px;background:var(--bg-hover);">
+                <strong><?= e((string) $announcement['title']) ?></strong>
+                <p class="page-subtitle" style="margin-top:6px;"><?= e((string) $announcement['body']) ?></p>
+                <p class="page-subtitle" style="margin-top:6px;"><?= e(formatUtcToIst((string) $announcement['published_at'])) ?></p>
+            </article>
+        <?php endforeach; ?>
+    </div>
+</section>
+<?php endif; ?>
 
 <section class="card" style="margin-top:24px;">
     <div class="page-header">

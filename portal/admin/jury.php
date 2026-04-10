@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../core/CSRF.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
+ensureOperationalTables($pdo);
 $requestedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT)
     ?: filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_INT);
 $hackathons = getAccessibleHackathons($pdo);
@@ -25,6 +26,16 @@ if ($selectedHackathonId !== null) {
     $rounds = $roundsStmt->fetchAll();
     if ($selectedRoundId === false || $selectedRoundId === null) {
         $selectedRoundId = (int) ($rounds[0]['id'] ?? 0);
+    }
+}
+
+$selectedRound = null;
+if ($selectedRoundId !== false && $selectedRoundId !== null) {
+    foreach ($rounds as $round) {
+        if ((int) $round['id'] === (int) $selectedRoundId) {
+            $selectedRound = $round;
+            break;
+        }
     }
 }
 
@@ -79,7 +90,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $teamStmt = $pdo->prepare('SELECT id FROM teams WHERE hackathon_id = ? ORDER BY RAND()');
         $teamStmt->execute([$selectedHackathonId]);
-        $teamIds = array_map(static fn(array $row): int => (int) $row['id'], $teamStmt->fetchAll());
+        $rawTeamIds = array_map(static fn(array $row): int => (int) $row['id'], $teamStmt->fetchAll());
+        $teamIds = array_values(array_filter($rawTeamIds, static fn(int $teamId): bool => teamEligibleForRound($pdo, $teamId, (int) $selectedRoundId)));
 
         if ($juryIds !== [] && $teamIds !== []) {
             foreach ($teamIds as $index => $teamId) {
@@ -118,7 +130,10 @@ if ($selectedHackathonId !== null && $selectedRoundId) {
          ORDER BY t.name ASC'
     );
     $teamsStmt->execute([$selectedHackathonId]);
-    $teams = $teamsStmt->fetchAll();
+    $teams = array_values(array_filter(
+        $teamsStmt->fetchAll(),
+        static fn(array $team): bool => teamEligibleForRound($pdo, (int) $team['id'], (int) $selectedRoundId)
+    ));
 
     $assignmentsStmt = $pdo->prepare('SELECT jury_user_id, team_id FROM jury_assignments WHERE hackathon_id = ? AND round_id = ?');
     $assignmentsStmt->execute([$selectedHackathonId, $selectedRoundId]);

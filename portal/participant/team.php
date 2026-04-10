@@ -76,6 +76,7 @@ $recomputeTeamStatus = static function (PDO $pdo, int $teamId): void {
 };
 
 $team = $fetchTeam($pdo, $participantId);
+$inviteJoinCode = strtoupper(trim((string) ($_GET['invite'] ?? '')));
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
@@ -115,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'join_team' && $team === false && $hackathon !== null) {
-        $joinCode = strtoupper(trim((string) ($_POST['join_code'] ?? '')));
+        $joinCode = strtoupper(trim((string) ($_POST['join_code'] ?? $inviteJoinCode)));
         $teamStmt = $pdo->prepare(
             'SELECT t.id, t.status, t.name, h.max_team_size
              FROM teams t
@@ -320,7 +321,7 @@ require_once __DIR__ . '/../../includes/header.php';
     </div>
 </section>
 
-<?php if ($team === false): ?>
+    <?php if ($team === false): ?>
     <section class="grid grid-3">
         <article class="card">
             <h2>Create a Team</h2>
@@ -339,12 +340,15 @@ require_once __DIR__ . '/../../includes/header.php';
         <article class="card" style="grid-column: span 2;">
             <h2>Join a Team</h2>
             <p class="page-subtitle" style="margin:10px 0 18px;">Enter an 8-character team code shared by your team leader.</p>
+            <?php if ($inviteJoinCode !== ''): ?>
+                <div class="flash flash-success">Invitation detected. Review and join this team code: <strong><?= e($inviteJoinCode) ?></strong></div>
+            <?php endif; ?>
             <form method="post" action="<?= e(appPath('portal/participant/team.php')) ?>">
                 <?= CSRF::field() ?>
                 <input type="hidden" name="action" value="join_team">
                 <div class="form-group" style="max-width:240px;">
                     <label for="join_code">Team Code</label>
-                    <input id="join_code" name="join_code" type="text" maxlength="8" minlength="8" style="text-transform:uppercase;" required>
+                    <input id="join_code" name="join_code" type="text" maxlength="8" minlength="8" style="text-transform:uppercase;" required value="<?= e($inviteJoinCode) ?>">
                 </div>
                 <p class="page-subtitle" style="margin-bottom:18px;">Team size allowed for this hackathon: <?= e((string) ($hackathon['min_team_size'] ?? 2)) ?> to <?= e((string) ($hackathon['max_team_size'] ?? 4)) ?> members.</p>
                 <button type="submit" class="btn-primary">Join Team</button>
@@ -369,6 +373,11 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="stat-label">Join Code</div>
             <div class="stat-value" style="font-size:22px;"><?= $isLeader ? e((string) $team['join_code']) : 'Hidden' ?></div>
             <p class="page-subtitle" style="margin-top:10px;"><?= $isLeader ? 'Share this code with your teammates.' : 'Only the leader can view the join code.' ?></p>
+            <?php if ($isLeader): ?>
+                <?php $inviteUrl = appPath('portal/participant/team.php?invite=' . urlencode((string) $team['join_code'])); ?>
+                <p class="page-subtitle" style="margin-top:10px;">Invite link:</p>
+                <input type="text" readonly value="<?= e($inviteUrl) ?>">
+            <?php endif; ?>
         </article>
     </section>
 

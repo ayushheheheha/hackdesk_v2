@@ -746,3 +746,290 @@ function statusBadgeClass(string $status): string
         default => 'badge-muted',
     };
 }
+
+function ensureOperationalTables(PDO $pdo): void
+{
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS announcements (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            hackathon_id INT UNSIGNED NOT NULL,
+            created_by INT UNSIGNED NOT NULL,
+            target_scope ENUM("all","participant","jury","staff","admin","team","round") NOT NULL DEFAULT "all",
+            target_team_id INT UNSIGNED NULL,
+            target_round_id INT UNSIGNED NULL,
+            title VARCHAR(180) NOT NULL,
+            body TEXT NOT NULL,
+            send_email TINYINT(1) NOT NULL DEFAULT 0,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            published_at DATETIME NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (hackathon_id) REFERENCES hackathons(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB'
+    );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS reminder_dispatch (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            hackathon_id INT UNSIGNED NOT NULL,
+            event_type VARCHAR(40) NOT NULL,
+            event_id INT UNSIGNED NOT NULL,
+            offset_hours INT NOT NULL,
+            recipient_email VARCHAR(180) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_reminder_dispatch (event_type, event_id, offset_hours, recipient_email)
+        ) ENGINE=InnoDB'
+    );
+
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS round_advancements (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            hackathon_id INT UNSIGNED NOT NULL,
+            round_id INT UNSIGNED NOT NULL,
+            team_id INT UNSIGNED NOT NULL,
+            is_selected TINYINT(1) NOT NULL DEFAULT 0,
+            decided_by INT UNSIGNED NULL,
+            decided_at DATETIME NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_round_advancement (round_id, team_id),
+            FOREIGN KEY (hackathon_id) REFERENCES hackathons(id) ON DELETE CASCADE,
+            FOREIGN KEY (round_id) REFERENCES rounds(id) ON DELETE CASCADE,
+            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+            FOREIGN KEY (decided_by) REFERENCES users(id) ON DELETE SET NULL
+        ) ENGINE=InnoDB'
+    );
+}
+
+function teamEligibleForRound(PDO $pdo, int $teamId, int $roundId): bool
+{
+    ensureOperationalTables($pdo);
+
+    $roundStmt = $pdo->prepare('SELECT id, hackathon_id, round_number FROM rounds WHERE id = ? LIMIT 1');
+    $roundStmt->execute([$roundId]);
+    $round = $roundStmt->fetch();
+    if ($round === false) {
+        return false;
+    }
+
+    if ((int) $round['round_number'] <= 1) {
+        return true;
+    }
+
+    $prevStmt = $pdo->prepare(
+        'SELECT ra.id
+         FROM round_advancements ra
+         INNER JOIN rounds r ON r.id = ra.round_id
+         WHERE ra.team_id = ? AND r.hackathon_id = ? AND r.round_number = ? AND ra.is_selected = 1
+         LIMIT 1'
+    );
+    $prevStmt->execute([$teamId, (int) $round['hackathon_id'], (int) $round['round_number'] - 1]);
+
+    return $prevStmt->fetch() !== false;
+}
+
+function fetchAnnouncements(PDO $pdo, int $hackathonId, string $role, ?int $teamId = null, ?int $roundId = null): array
+{
+    ensureOperationalTables($pdo);
+
+    $baseScopes = ['all', $role];
+    $where = ['a.hackathon_id = ?', 'a.is_active = 1'];
+    $params = [$hackathonId];
+
+    $scopeConditions = [];
+    foreach ($baseScopes as $scope) {
+        $scopeConditions[] = 'a.target_scope = ?';
+        $params[] = $scope;
+    }
+    if ($teamId !== null) {
+        $scopeConditions[] = '(a.target_scope = "team" AND a.target_team_id = ?)';
+        $params[] = $teamId;
+    }
+    if ($roundId !== null) {
+        $scopeConditions[] = '(a.target_scope = "round" AND a.target_round_id = ?)';
+        $params[] = $roundId;
+    }
+
+    $where[] = '(' . implode(' OR ', $scopeConditions) . ')';
+
+    $stmt = $pdo->prepare(
+        'SELECT a.id, a.title, a.body, a.target_scope, a.published_at, u.name AS author_name
+         FROM announcements a
+         INNER JOIN users u ON u.id = a.created_by
+         WHERE ' . implode(' AND ', $where) . '
+         ORDER BY a.published_at DESC, a.id DESC
+         LIMIT 8'
+    );
+    $stmt->execute($params);
+
+    return $stmt->fetchAll();
+}
+
+function runDeadlineReminders(PDO $pdo, int $hackathonId): array
+{
+    require_once __DIR__ . '/Mailer.php';
+
+    ensureOperationalTables($pdo);
+
+    $offsets = [48, 12, 1];
+    $now = utcNow();
+    $sent = 0;
+    $skipped = 0;
+
+    $sendIfDue = static function (
+        PDO $pdo,
+        string $eventType,
+        int $eventId,
+        int $hackathonId,
+        string $recipientEmail,
+        string $recipientName,
+        string $subject,
+        string $body,
+        array $offsets,
+        DateTimeImmutable $deadline,
+        DateTimeImmutable $now
+    ) use (&$sent, &$skipped): void {
+        $secondsRemaining = $deadline->getTimestamp() - $now->getTimestamp();
+        if ($secondsRemaining <= 0) {
+            return;
+        }
+
+        rsort($offsets);
+        $targetOffset = null;
+        $offsetCount = count($offsets);
+        for ($i = 0; $i < $offsetCount; $i++) {
+            $current = (int) $offsets[$i];
+            $next = $i + 1 < $offsetCount ? (int) $offsets[$i + 1] : 0;
+            if ($secondsRemaining <= ($current * 3600) && $secondsRemaining > ($next * 3600)) {
+                $targetOffset = $current;
+                break;
+            }
+        }
+
+        if ($targetOffset === null) {
+            return;
+        }
+
+        $checkStmt = $pdo->prepare(
+            'SELECT id FROM reminder_dispatch
+             WHERE event_type = ? AND event_id = ? AND offset_hours = ? AND recipient_email = ?
+             LIMIT 1'
+        );
+        $checkStmt->execute([$eventType, $eventId, $targetOffset, strtolower($recipientEmail)]);
+        if ($checkStmt->fetch() !== false) {
+            $skipped++;
+            return;
+        }
+
+        $ok = Mailer::sendMail($recipientEmail, $recipientName, $subject, $body);
+        $insertStmt = $pdo->prepare(
+            'INSERT INTO reminder_dispatch (hackathon_id, event_type, event_id, offset_hours, recipient_email)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        $insertStmt->execute([$hackathonId, $eventType, $eventId, $targetOffset, strtolower($recipientEmail)]);
+        if ($ok) {
+            $sent++;
+        } else {
+            $skipped++;
+        }
+
+    };
+
+    $psStmt = $pdo->prepare('SELECT id, name, ps_selection_deadline FROM hackathons WHERE id = ? AND ps_selection_deadline IS NOT NULL LIMIT 1');
+    $psStmt->execute([$hackathonId]);
+    $hackathon = $psStmt->fetch();
+    if ($hackathon !== false && !empty($hackathon['ps_selection_deadline'])) {
+        $deadline = new DateTimeImmutable((string) $hackathon['ps_selection_deadline'], new DateTimeZone('UTC'));
+        $leadersStmt = $pdo->prepare(
+            'SELECT DISTINCT p.email, p.name
+             FROM teams t
+             INNER JOIN participants p ON p.id = t.leader_participant_id
+             WHERE t.hackathon_id = ?'
+        );
+        $leadersStmt->execute([$hackathonId]);
+        foreach ($leadersStmt->fetchAll() as $leader) {
+            $subject = 'Reminder: Problem statement deadline for ' . (string) $hackathon['name'];
+            $body = '<p>Your problem statement selection deadline is approaching at <strong>' . e(formatUtcToIst((string) $hackathon['ps_selection_deadline'])) . '</strong>.</p>';
+            $sendIfDue(
+                $pdo,
+                'ps_selection',
+                (int) $hackathon['id'],
+                $hackathonId,
+                (string) $leader['email'],
+                (string) $leader['name'],
+                $subject,
+                $body,
+                $offsets,
+                $deadline,
+                $now
+            );
+        }
+    }
+
+    $roundStmt = $pdo->prepare(
+        'SELECT id, name, submission_deadline, judging_deadline
+         FROM rounds
+         WHERE hackathon_id = ?'
+    );
+    $roundStmt->execute([$hackathonId]);
+    $rounds = $roundStmt->fetchAll();
+
+    foreach ($rounds as $round) {
+        if (!empty($round['submission_deadline'])) {
+            $deadline = new DateTimeImmutable((string) $round['submission_deadline'], new DateTimeZone('UTC'));
+            $leadersStmt = $pdo->prepare(
+                'SELECT DISTINCT p.email, p.name
+                 FROM teams t
+                 INNER JOIN participants p ON p.id = t.leader_participant_id
+                 WHERE t.hackathon_id = ?'
+            );
+            $leadersStmt->execute([$hackathonId]);
+            foreach ($leadersStmt->fetchAll() as $leader) {
+                $subject = 'Reminder: Submission deadline for ' . (string) $round['name'];
+                $body = '<p>Round submission deadline is <strong>' . e(formatUtcToIst((string) $round['submission_deadline'])) . '</strong>.</p>';
+                $sendIfDue(
+                    $pdo,
+                    'round_submission',
+                    (int) $round['id'],
+                    $hackathonId,
+                    (string) $leader['email'],
+                    (string) $leader['name'],
+                    $subject,
+                    $body,
+                    $offsets,
+                    $deadline,
+                    $now
+                );
+            }
+        }
+
+        if (!empty($round['judging_deadline'])) {
+            $deadline = new DateTimeImmutable((string) $round['judging_deadline'], new DateTimeZone('UTC'));
+            $juryStmt = $pdo->prepare(
+                'SELECT DISTINCT u.email, u.name
+                 FROM jury_assignments ja
+                 INNER JOIN users u ON u.id = ja.jury_user_id
+                 WHERE ja.round_id = ?'
+            );
+            $juryStmt->execute([(int) $round['id']]);
+            foreach ($juryStmt->fetchAll() as $jury) {
+                $subject = 'Reminder: Judging deadline for ' . (string) $round['name'];
+                $body = '<p>Your judging deadline is <strong>' . e(formatUtcToIst((string) $round['judging_deadline'])) . '</strong>.</p>';
+                $sendIfDue(
+                    $pdo,
+                    'round_judging',
+                    (int) $round['id'],
+                    $hackathonId,
+                    (string) $jury['email'],
+                    (string) $jury['name'],
+                    $subject,
+                    $body,
+                    $offsets,
+                    $deadline,
+                    $now
+                );
+            }
+        }
+    }
+
+    return ['sent' => $sent, 'skipped' => $skipped];
+}

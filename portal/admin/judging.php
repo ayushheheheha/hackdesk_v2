@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../core/CSRF.php';
 Middleware::requireRole('admin');
 
 $pdo = Database::getConnection();
+ensureOperationalTables($pdo);
 $requestedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT)
     ?: filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_INT);
 $hackathons = getAccessibleHackathons($pdo);
@@ -19,12 +20,23 @@ $selectedRoundId = filter_input(INPUT_POST, 'round_id', FILTER_VALIDATE_INT)
     ?: filter_input(INPUT_GET, 'round_id', FILTER_VALIDATE_INT);
 
 $rounds = [];
+$isFinalRoundSelected = false;
 if ($selectedHackathonId !== null) {
     $roundsStmt = $pdo->prepare('SELECT id, name, round_number FROM rounds WHERE hackathon_id = ? ORDER BY round_number ASC');
     $roundsStmt->execute([$selectedHackathonId]);
     $rounds = $roundsStmt->fetchAll();
     if (($selectedRoundId === false || $selectedRoundId === null) && $rounds !== []) {
         $selectedRoundId = (int) $rounds[0]['id'];
+    }
+
+    if ($selectedRoundId) {
+        $maxRoundNumber = max(array_map(static fn(array $round): int => (int) $round['round_number'], $rounds));
+        foreach ($rounds as $round) {
+            if ((int) $round['id'] === (int) $selectedRoundId) {
+                $isFinalRoundSelected = (int) $round['round_number'] === $maxRoundNumber;
+                break;
+            }
+        }
     }
 }
 
@@ -38,6 +50,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare('UPDATE rounds SET status = ? WHERE id = ? AND hackathon_id = ?');
         $stmt->execute(['judging_done', $selectedRoundId, $selectedHackathonId]);
         flash('success', 'Round finalized successfully.');
+        redirect('portal/admin/judging.php?hackathon_id=' . $selectedHackathonId . '&round_id=' . $selectedRoundId);
+    }
+
+    if ((string) ($_POST['action'] ?? '') === 'toggle_shortlist' && $selectedRoundId) {
+        $teamId = filter_input(INPUT_POST, 'team_id', FILTER_VALIDATE_INT);
+        $target = isset($_POST['target']) && $_POST['target'] === '1' ? 1 : 0;
+        if ($teamId !== false && $teamId !== null) {
+            $stmt = $pdo->prepare(
+                'INSERT INTO round_advancements (hackathon_id, round_id, team_id, is_selected, decided_by, decided_at)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE is_selected = VALUES(is_selected), decided_by = VALUES(decided_by), decided_at = VALUES(decided_at)'
+            );
+            $stmt->execute([
+                $selectedHackathonId,
+                $selectedRoundId,
+                $teamId,
+                $target,
+                (int) ($_SESSION['user']['id'] ?? 0),
+                utcNow()->format('Y-m-d H:i:s'),
+            ]);
+
+            flash('success', $target === 1 ? 'Team shortlisted for progression.' : 'Team removed from shortlist.');
+        }
         redirect('portal/admin/judging.php?hackathon_id=' . $selectedHackathonId . '&round_id=' . $selectedRoundId);
     }
 }
@@ -84,7 +119,8 @@ if ($selectedRoundId) {
             COUNT(DISTINCT ja.id) AS assigned_jury_count,
             COUNT(DISTINCT s.id) AS scores_given_count,
             ROUND(AVG(s.total_score), 2) AS average_score,
-            GROUP_CONCAT(DISTINCT CONCAT(u.name, ": ", COALESCE(s.total_score, "NA")) ORDER BY u.name SEPARATOR " | ") AS individual_scores
+            GROUP_CONCAT(DISTINCT CONCAT(u.name, ": ", COALESCE(s.total_score, "NA")) ORDER BY u.name SEPARATOR " | ") AS individual_scores,
+            COALESCE(MAX(ra.is_selected), 0) AS is_shortlisted
          FROM teams t
          LEFT JOIN problem_statements ps ON ps.id = t.problem_statement_id
          LEFT JOIN team_members tm ON tm.team_id = t.id
@@ -92,11 +128,12 @@ if ($selectedRoundId) {
          LEFT JOIN jury_assignments ja ON ja.team_id = t.id AND ja.round_id = ?
          LEFT JOIN users u ON u.id = ja.jury_user_id
          LEFT JOIN scores s ON s.jury_assignment_id = ja.id
+         LEFT JOIN round_advancements ra ON ra.team_id = t.id AND ra.round_id = ?
          WHERE t.hackathon_id = ?
          GROUP BY t.id, t.name, ps.title
          ORDER BY t.name ASC'
     );
-    $stmt->execute([$selectedRoundId, $selectedHackathonId]);
+    $stmt->execute([$selectedRoundId, $selectedRoundId, $selectedHackathonId]);
     $overviewRows = $stmt->fetchAll();
 }
 
@@ -131,6 +168,7 @@ require_once __DIR__ . '/../../includes/header.php';
             </div>
         </form>
         <?php if ($selectedRoundId): ?>
+            <p class="page-subtitle" style="margin-bottom:10px;"><?= $isFinalRoundSelected ? 'Final round selected: shortlisted teams are treated as finalists.' : 'Shortlist teams here to move only shortlisted teams to the next round.' ?></p>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <form method="post" action="<?= e(appPath('portal/admin/judging.php?hackathon_id=' . (int) $selectedHackathonId . '&round_id=' . (int) $selectedRoundId)) ?>">
                     <?= CSRF::field() ?>
@@ -150,7 +188,7 @@ require_once __DIR__ . '/../../includes/header.php';
         <?php else: ?>
             <div class="table-shell">
                 <table>
-                    <thead><tr><th>Team</th><th>PS</th><th>Members</th><th>Assigned Jury</th><th>Scores Given</th><th>Average</th><th>Individual Jury Scores</th></tr></thead>
+                    <thead><tr><th>Team</th><th>PS</th><th>Members</th><th>Assigned Jury</th><th>Scores Given</th><th>Average</th><th>Individual Jury Scores</th><th>Progression</th></tr></thead>
                     <tbody>
                     <?php foreach ($overviewRows as $row): ?>
                         <?php
@@ -164,6 +202,17 @@ require_once __DIR__ . '/../../includes/header.php';
                             <td><span class="badge <?= e($statusColor) ?>"><?= e((string) $row['scores_given_count']) ?></span></td>
                             <td><?= e((string) ($row['average_score'] ?? '0.00')) ?></td>
                             <td><?= e((string) ($row['individual_scores'] ?? '-')) ?></td>
+                            <td>
+                                <form method="post" action="<?= e(appPath('portal/admin/judging.php?hackathon_id=' . (int) $selectedHackathonId . '&round_id=' . (int) $selectedRoundId)) ?>">
+                                    <?= CSRF::field() ?>
+                                    <input type="hidden" name="action" value="toggle_shortlist">
+                                    <input type="hidden" name="team_id" value="<?= e((string) $row['id']) ?>">
+                                    <input type="hidden" name="target" value="<?= (int) ($row['is_shortlisted'] ?? 0) === 1 ? '0' : '1' ?>">
+                                    <button type="submit" class="<?= (int) ($row['is_shortlisted'] ?? 0) === 1 ? 'btn-ghost' : 'btn-primary' ?>">
+                                        <?= (int) ($row['is_shortlisted'] ?? 0) === 1 ? ($isFinalRoundSelected ? 'Finalist' : 'Shortlisted') : ($isFinalRoundSelected ? 'Mark Finalist' : 'Shortlist') ?>
+                                    </button>
+                                </form>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>

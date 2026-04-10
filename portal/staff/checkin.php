@@ -207,7 +207,11 @@ if ($manualSearch !== '' && $selectedHackathonId !== null) {
 
 $stats = $selectedHackathonId !== null ? $fetchStats($pdo, $selectedHackathonId) : ['total_registered' => 0, 'total_checked_in' => 0, 'percentage' => 0];
 $recentScans = [];
+$announcements = [];
 if ($selectedHackathonId !== null) {
+    ensureOperationalTables($pdo);
+    $announcements = fetchAnnouncements($pdo, $selectedHackathonId, 'staff', null, null);
+
     $recentStmt = $pdo->prepare(
         'SELECT
             p.id,
@@ -234,6 +238,19 @@ require_once __DIR__ . '/../../includes/header.php';
         <p class="page-subtitle">Fast venue check-in for QR codes, barcodes, and manual fallback.</p>
     </div>
 </section>
+<?php if ($announcements !== []): ?>
+<section class="card" style="margin-bottom:24px;">
+    <h2>Staff Announcements</h2>
+    <div style="display:grid;gap:10px;margin-top:12px;">
+        <?php foreach ($announcements as $announcement): ?>
+            <article class="card" style="padding:14px;background:var(--bg-hover);">
+                <strong><?= e((string) $announcement['title']) ?></strong>
+                <p class="page-subtitle" style="margin-top:6px;"><?= e((string) $announcement['body']) ?></p>
+            </article>
+        <?php endforeach; ?>
+    </div>
+</section>
+<?php endif; ?>
 
 <section class="grid grid-3">
     <article class="card" style="grid-column: span 2;">

@@ -10,8 +10,11 @@ require_once __DIR__ . '/../../core/helpers.php';
 Middleware::requireRole('jury');
 
 $pdo = Database::getConnection();
+ensureOperationalTables($pdo);
 $juryUserId = (int) ($_SESSION['user']['id'] ?? 0);
 $roundFilter = filter_input(INPUT_GET, 'round_id', FILTER_VALIDATE_INT);
+$hackathonId = currentAssignedHackathonId();
+$announcements = $hackathonId !== null ? fetchAnnouncements($pdo, $hackathonId, 'jury', null, null) : [];
 
 $roundsStmt = $pdo->prepare(
     'SELECT DISTINCT r.id, r.name, r.round_number
@@ -48,6 +51,18 @@ $stmt = $pdo->prepare(
      LEFT JOIN submissions s ON s.team_id = ja.team_id AND s.round_id = ja.round_id
      LEFT JOIN scores sc ON sc.jury_assignment_id = ja.id
      WHERE ' . implode(' AND ', $where) . '
+       AND (
+            r.round_number = 1
+            OR EXISTS (
+                SELECT 1
+                FROM round_advancements ra
+                INNER JOIN rounds pr ON pr.id = ra.round_id
+                WHERE ra.team_id = ja.team_id
+                  AND pr.hackathon_id = ja.hackathon_id
+                  AND pr.round_number = r.round_number - 1
+                  AND ra.is_selected = 1
+            )
+       )
      ORDER BY h.name ASC, r.round_number ASC, t.name ASC'
 );
 $stmt->execute($params);
@@ -59,6 +74,19 @@ require_once __DIR__ . '/../../includes/header.php';
 <section class="page-header">
     <div><h1>Jury Dashboard</h1><p class="page-subtitle">Your assigned teams and rounds for judging.</p></div>
 </section>
+<?php if ($announcements !== []): ?>
+<section class="card" style="margin-bottom:24px;">
+    <h2>Announcements</h2>
+    <div style="display:grid;gap:10px;margin-top:12px;">
+        <?php foreach ($announcements as $announcement): ?>
+            <article class="card" style="padding:14px;background:var(--bg-hover);">
+                <strong><?= e((string) $announcement['title']) ?></strong>
+                <p class="page-subtitle" style="margin-top:6px;"><?= e((string) $announcement['body']) ?></p>
+            </article>
+        <?php endforeach; ?>
+    </div>
+</section>
+<?php endif; ?>
 <section class="card" style="margin-bottom:24px;">
     <form method="get" action="<?= e(appPath('portal/jury/dashboard.php')) ?>">
         <div class="form-group" style="max-width:320px;">
