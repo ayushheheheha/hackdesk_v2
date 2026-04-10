@@ -160,6 +160,12 @@ label {
     border-color: rgba(157, 47, 47, 0.2);
 }
 
+.flash-warning {
+    color: var(--warning);
+    background: rgba(155, 103, 0, 0.08);
+    border-color: rgba(155, 103, 0, 0.2);
+}
+
 .sidebar {
     position: fixed;
     top: 0;

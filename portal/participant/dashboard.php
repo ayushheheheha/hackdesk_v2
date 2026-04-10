@@ -6,10 +6,33 @@ require_once __DIR__ . '/../../config/config.php';
 require_once __DIR__ . '/../../core/Middleware.php';
 require_once __DIR__ . '/../../core/ParticipantAuth.php';
 require_once __DIR__ . '/../../config/database.php';
+require_once __DIR__ . '/../../core/CSRF.php';
 
 Middleware::requireParticipantAuth();
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
+        flash('error', 'Your session token is invalid. Please try again.');
+        redirect('portal/participant/dashboard.php');
+    }
+
+    $action = (string) ($_POST['action'] ?? '');
+    if ($action === 'switch_hackathon') {
+        $targetHackathonId = filter_input(INPUT_POST, 'target_hackathon_id', FILTER_VALIDATE_INT);
+        if ($targetHackathonId === false || $targetHackathonId === null) {
+            flash('error', 'Invalid hackathon selected.');
+        } elseif (ParticipantAuth::switchHackathonForCurrentParticipant((int) $targetHackathonId)) {
+            flash('success', 'Switched to selected hackathon.');
+        } else {
+            flash('error', 'Could not switch to that hackathon for this participant account.');
+        }
+
+        redirect('portal/participant/dashboard.php');
+    }
+}
+
 $participant = ParticipantAuth::participant();
 $pdo = Database::getConnection();
+$registrations = ParticipantAuth::registrationsForCurrentParticipant();
 
 $teamStmt = $pdo->prepare(
     'SELECT
@@ -57,6 +80,27 @@ require_once __DIR__ . '/../../includes/header.php';
     </div>
     <span class="badge <?= e($checkInClass) ?>"><?= e(ucwords(str_replace('_', ' ', (string) ($participant['check_in_status'] ?? 'not_checked_in')))) ?></span>
 </section>
+<?php if (count($registrations) > 1): ?>
+<section class="card" style="margin-bottom:24px;">
+    <h2>Switch Hackathon</h2>
+    <p class="page-subtitle" style="margin-top:8px;">You are registered in multiple events. Choose which dashboard context you want to use.</p>
+    <form method="post" action="<?= e(appPath('portal/participant/dashboard.php')) ?>" style="margin-top:14px;">
+        <?= CSRF::field() ?>
+        <input type="hidden" name="action" value="switch_hackathon">
+        <div class="form-group" style="max-width:420px;">
+            <label for="target_hackathon_id">Hackathon</label>
+            <select id="target_hackathon_id" name="target_hackathon_id">
+                <?php foreach ($registrations as $registration): ?>
+                    <option value="<?= e((string) $registration['hackathon_id']) ?>" <?= (int) $registration['hackathon_id'] === (int) ($participant['hackathon_id'] ?? 0) ? 'selected' : '' ?>>
+                        <?= e((string) $registration['hackathon_name']) ?> | <?= e(formatUtcToIst((string) $registration['starts_at'], 'd M Y')) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <button type="submit" class="btn-primary">Switch</button>
+    </form>
+</section>
+<?php endif; ?>
 
 <section class="grid grid-3">
     <article class="card">

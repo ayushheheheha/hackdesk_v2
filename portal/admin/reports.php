@@ -6,6 +6,7 @@ require_once __DIR__ . '/../../config/config.php';
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../core/Middleware.php';
 require_once __DIR__ . '/../../core/helpers.php';
+require_once __DIR__ . '/../../core/CSRF.php';
 
 Middleware::requireRole('admin');
 
@@ -15,6 +16,21 @@ $requestedHackathonId = filter_input(INPUT_GET, 'hackathon_id', FILTER_VALIDATE_
     ?: filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE_INT);
 $hackathons = getAccessibleHackathons($pdo);
 $selectedHackathonId = resolveSelectedHackathonId($pdo, $requestedHackathonId);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedHackathonId !== null) {
+    if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
+        flash('error', 'Your session token is invalid. Please try again.');
+        redirect('portal/admin/reports.php?hackathon_id=' . $selectedHackathonId);
+    }
+
+    $action = (string) ($_POST['action'] ?? '');
+    if ($action === 'mark_archived') {
+        $stmt = $pdo->prepare('UPDATE hackathons SET status = ? WHERE id = ?');
+        $stmt->execute(['completed', $selectedHackathonId]);
+        flash('success', 'Hackathon marked completed for archive workflow.');
+        redirect('portal/admin/reports.php?hackathon_id=' . $selectedHackathonId);
+    }
+}
 
 if (isset($_GET['export']) && $selectedHackathonId !== null) {
     $export = trim((string) $_GET['export']);
@@ -146,6 +162,100 @@ if (isset($_GET['export']) && $selectedHackathonId !== null) {
         }
 
         downloadCsv('certificate-log-' . $selectedHackathonId . '.csv', ['participant', 'type', 'issued_at', 'revoked'], $rows);
+    }
+
+    if ($export === 'orphan_files') {
+        $base = dirname(__DIR__, 2) . '/uploads';
+        $referenced = [];
+
+        $pathQueries = [
+            'SELECT id_card_path AS path FROM participants WHERE hackathon_id = ? AND id_card_path IS NOT NULL',
+            'SELECT ppt_file_path AS path FROM submissions s INNER JOIN rounds r ON r.id = s.round_id WHERE r.hackathon_id = ? AND s.ppt_file_path IS NOT NULL',
+            'SELECT file_path AS path FROM certificates WHERE hackathon_id = ? AND file_path IS NOT NULL',
+        ];
+
+        foreach ($pathQueries as $sql) {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$selectedHackathonId]);
+            foreach ($stmt->fetchAll() as $row) {
+                $referenced[str_replace('\\', '/', ltrim((string) $row['path'], '/'))] = true;
+            }
+        }
+
+        $scanDirs = [
+            $base . '/id-cards/' . (int) $selectedHackathonId,
+            $base . '/submissions/' . (int) $selectedHackathonId,
+            $base . '/certificates/' . (int) $selectedHackathonId,
+        ];
+
+        $orphans = [];
+        foreach ($scanDirs as $scanDir) {
+            if (!is_dir($scanDir)) {
+                continue;
+            }
+
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($scanDir, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($iterator as $fileInfo) {
+                if (!$fileInfo->isFile()) {
+                    continue;
+                }
+                $absolutePath = str_replace('\\', '/', $fileInfo->getPathname());
+                $relativePath = ltrim(str_replace(str_replace('\\', '/', dirname(__DIR__, 2)) . '/', '', $absolutePath), '/');
+                if (!isset($referenced[$relativePath])) {
+                    $orphans[] = [$relativePath, $fileInfo->getSize(), date('Y-m-d H:i:s', $fileInfo->getMTime())];
+                }
+            }
+        }
+
+        downloadCsv('orphan-files-' . $selectedHackathonId . '.csv', ['path', 'size_bytes', 'last_modified'], $orphans);
+    }
+
+    if ($export === 'archive_uploads') {
+        $archiveRoot = dirname(__DIR__, 2) . '/uploads/archives';
+        if (!is_dir($archiveRoot) && !mkdir($archiveRoot, 0775, true) && !is_dir($archiveRoot)) {
+            flash('error', 'Could not create archive folder.');
+            redirect('portal/admin/reports.php?hackathon_id=' . $selectedHackathonId);
+        }
+
+        $archiveName = 'hackathon-' . $selectedHackathonId . '-uploads-' . date('Ymd-His') . '.zip';
+        $archivePath = $archiveRoot . '/' . $archiveName;
+
+        $zip = new ZipArchive();
+        if ($zip->open($archivePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            flash('error', 'Could not generate archive ZIP.');
+            redirect('portal/admin/reports.php?hackathon_id=' . $selectedHackathonId);
+        }
+
+        $folders = [
+            'id-cards/' . (int) $selectedHackathonId,
+            'submissions/' . (int) $selectedHackathonId,
+            'certificates/' . (int) $selectedHackathonId,
+        ];
+        foreach ($folders as $folder) {
+            $fullDir = dirname(__DIR__, 2) . '/uploads/' . $folder;
+            if (!is_dir($fullDir)) {
+                continue;
+            }
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($fullDir, FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($iterator as $fileInfo) {
+                if (!$fileInfo->isFile()) {
+                    continue;
+                }
+                $localName = 'uploads/' . $folder . '/' . ltrim(str_replace('\\', '/', substr($fileInfo->getPathname(), strlen($fullDir))), '/');
+                $zip->addFile($fileInfo->getPathname(), $localName);
+            }
+        }
+        $zip->close();
+
+        header('Content-Type: application/zip');
+        header('Content-Disposition: attachment; filename="' . basename($archivePath) . '"');
+        header('Content-Length: ' . filesize($archivePath));
+        readfile($archivePath);
+        exit;
     }
 }
 
@@ -374,6 +484,13 @@ require_once __DIR__ . '/../../includes/header.php';
             <a class="btn-ghost" href="<?= e(appPath('portal/admin/reports.php?hackathon_id=' . (int) $selectedHackathonId . '&export=teams')) ?>">All Teams CSV</a>
             <a class="btn-ghost" href="<?= e(appPath('portal/admin/reports.php?hackathon_id=' . (int) $selectedHackathonId . '&export=scores')) ?>">Scores CSV</a>
             <a class="btn-ghost" href="<?= e(appPath('portal/admin/reports.php?hackathon_id=' . (int) $selectedHackathonId . '&export=certificates')) ?>">Certificate Log CSV</a>
+            <a class="btn-ghost" href="<?= e(appPath('portal/admin/reports.php?hackathon_id=' . (int) $selectedHackathonId . '&export=orphan_files')) ?>">Orphan Files CSV</a>
+            <a class="btn-ghost" href="<?= e(appPath('portal/admin/reports.php?hackathon_id=' . (int) $selectedHackathonId . '&export=archive_uploads')) ?>">Archive Uploads ZIP</a>
+            <form method="post" action="<?= e(appPath('portal/admin/reports.php?hackathon_id=' . (int) $selectedHackathonId)) ?>" style="display:inline-flex;">
+                <?= CSRF::field() ?>
+                <input type="hidden" name="action" value="mark_archived">
+                <button type="submit" class="btn-ghost">Mark Event Completed</button>
+            </form>
         </div>
     </section>
 

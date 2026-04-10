@@ -55,6 +55,19 @@ if ($assignment === null) {
 
 $criteria = decodeCriteria($assignment['judging_criteria'] ?? null);
 $savedScores = $assignment['criteria_scores'] !== null ? (json_decode((string) $assignment['criteria_scores'], true) ?: []) : [];
+$maxTotal = array_sum(array_map(static fn(array $criterion): float => (float) $criterion['max'], $criteria));
+
+$nextAssignmentStmt = $pdo->prepare(
+    'SELECT ja.id
+     FROM jury_assignments ja
+     LEFT JOIN scores sc ON sc.jury_assignment_id = ja.id
+     WHERE ja.jury_user_id = ? AND (sc.id IS NULL OR sc.total_score IS NULL)
+       AND ja.id <> ?
+     ORDER BY ja.id ASC
+     LIMIT 1'
+);
+$nextAssignmentStmt->execute([$juryUserId, $assignmentId]);
+$nextAssignmentId = (int) ($nextAssignmentStmt->fetchColumn() ?: 0);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!CSRF::validate($_POST['csrf_token'] ?? null)) {
@@ -176,11 +189,15 @@ require_once __DIR__ . '/../../includes/header.php';
                     <label>Total Score</label>
                     <input id="total-score" type="number" value="<?= e((string) ($assignment['total_score'] ?? '0')) ?>" readonly>
                 </div>
+                <p id="score-status" class="page-subtitle" style="margin-bottom:10px;">Max available: <?= e(number_format($maxTotal, 1)) ?></p>
                 <div class="form-group">
                     <label for="remarks">Remarks</label>
                     <textarea id="remarks" name="remarks" rows="4"><?= e((string) ($assignment['remarks'] ?? '')) ?></textarea>
                 </div>
                 <button type="submit" class="btn-primary">Save Score</button>
+                <?php if ($nextAssignmentId > 0): ?>
+                    <a class="btn-ghost" href="<?= e(appPath('portal/jury/score.php?assignment_id=' . $nextAssignmentId)) ?>">Next Assignment</a>
+                <?php endif; ?>
             </form>
         <?php endif; ?>
         <?php if ($assignment['updated_at'] !== null): ?>
@@ -190,17 +207,44 @@ require_once __DIR__ . '/../../includes/header.php';
 </section>
 <script>
 const totalScoreInput = document.getElementById('total-score');
+const scoreStatus = document.getElementById('score-status');
+const maxTotalScore = <?= json_encode((float) $maxTotal) ?>;
 function updateTotalScore() {
     if (!totalScoreInput) {
         return;
     }
     let total = 0;
+    let incomplete = 0;
     document.querySelectorAll('.criterion-input').forEach((input) => {
+        if (input.value === '') {
+            incomplete += 1;
+        }
         total += Number(input.value || 0);
     });
     totalScoreInput.value = total.toFixed(1);
+    if (scoreStatus) {
+        if (total > maxTotalScore) {
+            scoreStatus.textContent = `Warning: total exceeds max (${maxTotalScore.toFixed(1)}).`;
+            scoreStatus.style.color = 'var(--danger)';
+        } else if (incomplete > 0) {
+            scoreStatus.textContent = `Pending: ${incomplete} criterion field(s) still blank.`;
+            scoreStatus.style.color = 'var(--warning)';
+        } else {
+            scoreStatus.textContent = `Complete: ${total.toFixed(1)} / ${maxTotalScore.toFixed(1)} points.`;
+            scoreStatus.style.color = 'var(--success)';
+        }
+    }
 }
 document.querySelectorAll('.criterion-input').forEach((input) => input.addEventListener('input', updateTotalScore));
 updateTotalScore();
+
+window.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        const form = document.querySelector('form[action*="portal/jury/score.php"]');
+        if (form) {
+            form.submit();
+        }
+    }
+});
 </script>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

@@ -128,7 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stats = $fetchStats($pdo, $selectedHackathonId);
         }
 
-        if ($action === 'manual_checkin') {
+    if ($action === 'manual_checkin') {
             $participantId = filter_input(INPUT_POST, 'participant_id', FILTER_VALIDATE_INT);
             if ($participantId === false || $participantId === null) {
                 $result = ['ok' => false, 'type' => 'error', 'message' => 'Invalid participant selected.'];
@@ -143,6 +143,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'ok' => true,
                     'type' => 'success',
                     'message' => 'Participant checked in.',
+                    'stats' => $fetchStats($pdo, $selectedHackathonId),
+                ];
+            }
+
+            if ($isAjax) {
+                echo json_encode($result);
+                exit;
+            }
+            $pageFeedback = $result;
+            $stats = $fetchStats($pdo, $selectedHackathonId);
+        }
+
+        if ($action === 'undo_checkin') {
+            $participantId = filter_input(INPUT_POST, 'participant_id', FILTER_VALIDATE_INT);
+            if ($participantId === false || $participantId === null) {
+                $result = ['ok' => false, 'type' => 'error', 'message' => 'Invalid participant selected for undo.'];
+            } else {
+                $undoStmt = $pdo->prepare(
+                    'UPDATE participants
+                     SET check_in_status = ?, checked_in_at = NULL, checked_in_by = NULL
+                     WHERE id = ? AND hackathon_id = ? AND check_in_status = ?'
+                );
+                $undoStmt->execute(['not_checked_in', $participantId, $selectedHackathonId, 'checked_in']);
+                $result = [
+                    'ok' => $undoStmt->rowCount() > 0,
+                    'type' => $undoStmt->rowCount() > 0 ? 'success' : 'warning',
+                    'message' => $undoStmt->rowCount() > 0 ? 'Check-in reverted.' : 'Unable to revert check-in.',
                     'stats' => $fetchStats($pdo, $selectedHackathonId),
                 ];
             }
@@ -179,6 +206,24 @@ if ($manualSearch !== '' && $selectedHackathonId !== null) {
 }
 
 $stats = $selectedHackathonId !== null ? $fetchStats($pdo, $selectedHackathonId) : ['total_registered' => 0, 'total_checked_in' => 0, 'percentage' => 0];
+$recentScans = [];
+if ($selectedHackathonId !== null) {
+    $recentStmt = $pdo->prepare(
+        'SELECT
+            p.id,
+            p.name,
+            p.checked_in_at,
+            p.check_in_status,
+            u.name AS checked_in_by_name
+         FROM participants p
+         LEFT JOIN users u ON u.id = p.checked_in_by
+         WHERE p.hackathon_id = ? AND p.checked_in_at IS NOT NULL
+         ORDER BY p.checked_in_at DESC
+         LIMIT 10'
+    );
+    $recentStmt->execute([$selectedHackathonId]);
+    $recentScans = $recentStmt->fetchAll();
+}
 
 $pageTitle = 'Check-In Scanner';
 require_once __DIR__ . '/../../includes/header.php';
@@ -192,6 +237,9 @@ require_once __DIR__ . '/../../includes/header.php';
 
 <section class="grid grid-3">
     <article class="card" style="grid-column: span 2;">
+        <div id="scanner-diagnostics" class="flash flash-success" style="margin-bottom:14px;">
+            Scanner diagnostics: online and ready. Keep cursor in scan box for high-volume flow.
+        </div>
         <form id="scan-form" method="post" action="<?= e(appPath('portal/staff/checkin.php')) ?>">
             <input type="hidden" name="ajax" value="1">
             <input type="hidden" name="action" value="scan">
@@ -245,6 +293,36 @@ require_once __DIR__ . '/../../includes/header.php';
                 </table>
             </div>
         <?php endif; ?>
+
+        <section class="card" style="margin-top:18px;">
+            <h3>Recent Scans (Last 10)</h3>
+            <?php if ($recentScans === []): ?>
+                <p class="empty-state" style="margin-top:8px;">No recent check-ins yet.</p>
+            <?php else: ?>
+                <div class="table-shell" style="margin-top:10px;">
+                    <table>
+                        <thead><tr><th>Name</th><th>Checked In At</th><th>By</th><th>Action</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($recentScans as $scan): ?>
+                            <tr>
+                                <td><?= e((string) $scan['name']) ?></td>
+                                <td><?= e(formatUtcToIst((string) $scan['checked_in_at'])) ?></td>
+                                <td><?= e((string) ($scan['checked_in_by_name'] ?? 'System')) ?></td>
+                                <td>
+                                    <form method="post" action="<?= e(appPath('portal/staff/checkin.php?hackathon_id=' . (int) $selectedHackathonId)) ?>">
+                                        <?= CSRF::field() ?>
+                                        <input type="hidden" name="action" value="undo_checkin">
+                                        <input type="hidden" name="participant_id" value="<?= e((string) $scan['id']) ?>">
+                                        <button type="submit" class="btn-ghost">Undo</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </section>
     </article>
 
     <aside class="card">
@@ -269,6 +347,8 @@ const csrfToken = <?= json_encode(CSRF::generate()) ?>;
 const hackathonId = <?= json_encode((int) $selectedHackathonId) ?>;
 const requestPath = window.location.pathname.replace(/^\/+/, '/');
 const ajaxField = scanForm.querySelector('input[name="ajax"]');
+const diagnostics = document.getElementById('scanner-diagnostics');
+const queueKey = 'hackdesk_checkin_queue_' + String(hackathonId);
 
 function renderFeedback(type, message, participant = null) {
     const colors = {
@@ -297,6 +377,66 @@ function updateStats(stats) {
     statPercent.textContent = `${stats.percentage}%`;
 }
 
+function setDiagnostics(message, kind = 'success') {
+    if (!diagnostics) return;
+    diagnostics.classList.remove('flash-success', 'flash-error', 'flash-warning');
+    diagnostics.classList.add(kind === 'error' ? 'flash-error' : (kind === 'warning' ? 'flash-warning' : 'flash-success'));
+    diagnostics.textContent = message;
+}
+
+function readQueue() {
+    try {
+        return JSON.parse(localStorage.getItem(queueKey) || '[]');
+    } catch (error) {
+        return [];
+    }
+}
+
+function writeQueue(items) {
+    localStorage.setItem(queueKey, JSON.stringify(items));
+}
+
+function enqueueCode(code) {
+    const queue = readQueue();
+    queue.push({ code, at: Date.now() });
+    writeQueue(queue);
+    setDiagnostics(`Offline queue active: ${queue.length} pending scan(s).`, 'warning');
+}
+
+async function flushQueue() {
+    const queue = readQueue();
+    if (queue.length === 0 || !navigator.onLine) {
+        return;
+    }
+
+    const remaining = [];
+    for (const item of queue) {
+        try {
+            const fd = new FormData();
+            fd.append('ajax', '1');
+            fd.append('action', 'scan');
+            fd.append('hackathon_id', String(hackathonId));
+            fd.append('csrf_token', csrfToken);
+            fd.append('code', item.code);
+            const response = await fetch(requestPath + '?hackathon_id=' + hackathonId, { method: 'POST', body: fd });
+            if (!response.ok) {
+                throw new Error('Bad response');
+            }
+            const result = await response.json();
+            updateStats(result.stats || null);
+        } catch (error) {
+            remaining.push(item);
+        }
+    }
+
+    writeQueue(remaining);
+    if (remaining.length === 0) {
+        setDiagnostics('Scanner diagnostics: online and ready. Offline queue synced.', 'success');
+    } else {
+        setDiagnostics(`Offline queue pending: ${remaining.length} scan(s).`, 'warning');
+    }
+}
+
 scanForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     try {
@@ -309,9 +449,16 @@ scanForm.addEventListener('submit', async (event) => {
         renderFeedback(result.type, result.message, result.participant || null);
         updateStats(result.stats || null);
     } catch (error) {
-        ajaxField.value = '0';
-        scanForm.submit();
-        return;
+        const code = (scanInput.value || '').trim();
+        if (code !== '') {
+            enqueueCode(code);
+            renderFeedback('warning', 'Network issue: scan queued locally and will auto-sync when online.');
+            updateStats(null);
+        } else {
+            ajaxField.value = '0';
+            scanForm.submit();
+            return;
+        }
     } finally {
         setTimeout(() => {
             scanInput.value = '';
@@ -354,9 +501,25 @@ document.querySelectorAll('.manual-checkin').forEach((button) => {
 });
 
 setInterval(async () => {
-    const response = await fetch(requestPath + '?hackathon_id=' + hackathonId + '&ajax=stats');
-    const stats = await response.json();
-    updateStats(stats);
+    try {
+        const response = await fetch(requestPath + '?hackathon_id=' + hackathonId + '&ajax=stats');
+        const stats = await response.json();
+        updateStats(stats);
+        if (navigator.onLine) {
+            setDiagnostics('Scanner diagnostics: online and ready.', 'success');
+        }
+    } catch (error) {
+        setDiagnostics('Scanner diagnostics: network unstable. Offline queue mode enabled.', 'warning');
+    }
 }, 10000);
+
+window.addEventListener('online', () => {
+    setDiagnostics('Connection restored. Syncing offline queue...', 'success');
+    flushQueue();
+});
+window.addEventListener('offline', () => {
+    setDiagnostics('No internet. Scans will be queued locally.', 'warning');
+});
+flushQueue();
 </script>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

@@ -243,8 +243,25 @@ function resolveSelectedHackathonId(PDO $pdo, ?int $requestedHackathonId = null)
 
     $accessibleIds = array_map(static fn(array $hackathon): int => (int) $hackathon['id'], $accessibleHackathons);
 
-    if ($requestedHackathonId !== null && in_array($requestedHackathonId, $accessibleIds, true)) {
-        return $requestedHackathonId;
+    if ($requestedHackathonId !== null) {
+        if (in_array($requestedHackathonId, $accessibleIds, true)) {
+            return $requestedHackathonId;
+        }
+
+        // Audit cross-hackathon access attempts for scoped roles.
+        if (isset($_SESSION['user']['id'])) {
+            logActivity(
+                'hackathon_scope_violation',
+                'hackathon',
+                $requestedHackathonId,
+                [
+                    'requested_hackathon_id' => $requestedHackathonId,
+                    'allowed_hackathon_ids' => $accessibleIds,
+                    'role' => currentUserRole(),
+                ],
+                $accessibleIds[0] ?? null
+            );
+        }
     }
 
     return $accessibleIds[0];

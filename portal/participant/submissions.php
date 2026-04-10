@@ -235,13 +235,37 @@ require_once __DIR__ . '/../../includes/header.php';
                 <?php if (!$isLeader): ?>
                     <p class="empty-state">Only the team leader can submit for this round. You can view the current submission below.</p>
                 <?php endif; ?>
+                <?php
+                $requiredChecks = [];
+                if ((int) $round['ppt_required'] === 1) {
+                    $requiredChecks[] = ['label' => 'PPT/PDF uploaded', 'ok' => !empty($round['ppt_file_path'])];
+                }
+                if ((int) $round['github_required'] === 1) {
+                    $requiredChecks[] = ['label' => 'GitHub URL', 'ok' => !empty($round['github_url'])];
+                }
+                if ((int) $round['abstract_required'] === 1) {
+                    $requiredChecks[] = ['label' => 'Abstract', 'ok' => !empty($round['abstract'])];
+                }
+                ?>
+                <?php if ($requiredChecks !== []): ?>
+                    <div class="card" style="margin-top:14px;background:var(--bg-hover);">
+                        <h3>Required Checklist</h3>
+                        <ul style="margin:10px 0 0 18px;padding:0;">
+                            <?php foreach ($requiredChecks as $check): ?>
+                                <li style="margin:4px 0;color:<?= $check['ok'] ? 'var(--success)' : 'var(--text-muted)' ?>;">
+                                    <?= $check['ok'] ? 'Done' : 'Pending' ?> - <?= e((string) $check['label']) ?>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
                 <form method="post" enctype="multipart/form-data" action="<?= e(appPath('portal/participant/submissions.php')) ?>" style="margin-top:14px;">
                     <?= CSRF::field() ?>
                     <input type="hidden" name="round_id" value="<?= e((string) $round['id']) ?>">
                     <?php if ((int) $round['ppt_required'] === 1): ?>
                         <div class="form-group">
                             <label>PPT Upload</label>
-                            <input name="ppt_file" type="file" accept=".ppt,.pptx,.pdf" <?= !$isLeader ? 'disabled' : '' ?>>
+                            <input name="ppt_file" type="file" accept=".ppt,.pptx,.pdf" <?= !$isLeader ? 'disabled' : '' ?> data-required-field="<?= (int) $round['ppt_required'] === 1 ? '1' : '0' ?>">
                             <?php if ($round['ppt_file_path'] !== null): ?>
                                 <p class="page-subtitle" style="margin-top:8px;">Current: <a href="<?= e(appPath('public/submission-file.php?submission_id=' . (int) $round['submission_id'])) ?>"><?= e((string) $round['ppt_original_name']) ?></a></p>
                             <?php endif; ?>
@@ -250,7 +274,7 @@ require_once __DIR__ . '/../../includes/header.php';
                     <?php if ((int) $round['github_required'] === 1): ?>
                         <div class="form-group">
                             <label>GitHub URL</label>
-                            <input name="github_url" type="url" value="<?= e((string) ($round['github_url'] ?? '')) ?>" <?= !$isLeader ? 'disabled' : '' ?>>
+                            <input name="github_url" type="url" value="<?= e((string) ($round['github_url'] ?? '')) ?>" <?= !$isLeader ? 'disabled' : '' ?> data-required-field="<?= (int) $round['github_required'] === 1 ? '1' : '0' ?>" data-required-label="GitHub URL">
                         </div>
                     <?php endif; ?>
                     <?php if ((int) $round['custom_link_allowed'] === 1): ?>
@@ -262,16 +286,65 @@ require_once __DIR__ . '/../../includes/header.php';
                     <?php if ((int) $round['abstract_required'] === 1): ?>
                         <div class="form-group">
                             <label>Abstract</label>
-                            <textarea name="abstract" rows="4" maxlength="500" <?= !$isLeader ? 'disabled' : '' ?>><?= e((string) ($round['abstract'] ?? '')) ?></textarea>
+                            <textarea name="abstract" rows="4" maxlength="500" <?= !$isLeader ? 'disabled' : '' ?> data-required-field="<?= (int) $round['abstract_required'] === 1 ? '1' : '0' ?>" data-required-label="Abstract"><?= e((string) ($round['abstract'] ?? '')) ?></textarea>
                         </div>
                     <?php endif; ?>
                     <?php if ($isLeader): ?>
                         <button type="submit" name="intent" value="draft" class="btn-ghost">Save Draft</button>
                         <button type="submit" name="intent" value="submitted" class="btn-primary">Submit</button>
+                        <span class="page-subtitle local-autosave" data-round-id="<?= e((string) $round['id']) ?>" style="display:inline-block;margin-left:12px;">No local autosave yet.</span>
                     <?php endif; ?>
                 </form>
             <?php endif; ?>
         </section>
     <?php endforeach; ?>
 <?php endif; ?>
+<script>
+document.querySelectorAll('form[action$="portal/participant/submissions.php"]').forEach((form) => {
+    const roundIdInput = form.querySelector('input[name="round_id"]');
+    const autosaveLabel = form.querySelector('.local-autosave');
+    const storageKey = roundIdInput ? `hackdesk_submission_local_${roundIdInput.value}` : null;
+
+    if (storageKey && autosaveLabel) {
+        const lastSaved = localStorage.getItem(storageKey);
+        if (lastSaved) {
+            autosaveLabel.textContent = `Local draft updated at ${new Date(Number(lastSaved)).toLocaleString()}`;
+        }
+
+        form.querySelectorAll('input, textarea, select').forEach((field) => {
+            field.addEventListener('input', () => {
+                localStorage.setItem(storageKey, String(Date.now()));
+                autosaveLabel.textContent = `Local draft updated at ${new Date().toLocaleString()}`;
+            });
+        });
+    }
+
+    form.addEventListener('submit', (event) => {
+        const submitter = event.submitter;
+        if (!submitter || submitter.name !== 'intent' || submitter.value !== 'submitted') {
+            return;
+        }
+
+        const missing = [];
+        form.querySelectorAll('[data-required-field="1"]').forEach((field) => {
+            if ((field.value || '').trim() === '') {
+                missing.push(field.getAttribute('data-required-label') || 'Required field');
+            }
+        });
+
+        const fileInput = form.querySelector('input[name="ppt_file"][data-required-field="1"]');
+        if (fileInput && !(fileInput.files && fileInput.files.length > 0)) {
+            const hasCurrent = form.querySelector('a[href*="submission-file.php"]');
+            if (!hasCurrent) {
+                missing.push('PPT/PDF upload');
+            }
+        }
+
+        if (missing.length > 0) {
+            event.preventDefault();
+            alert(`Please complete required fields before submission:\n- ${missing.join('\n- ')}`);
+        }
+    });
+});
+</script>
 <?php require_once __DIR__ . '/../../includes/footer.php'; ?>

@@ -18,7 +18,23 @@ $requestedHackathonId = filter_input(INPUT_POST, 'hackathon_id', FILTER_VALIDATE
 $hackathons = getAccessibleHackathons($pdo);
 $selectedHackathonId = resolveSelectedHackathonId($pdo, $requestedHackathonId);
 
-$sendCertificateEmail = static function (PDO $pdo, int $certificateId): bool {
+$ensureEmailLogTable = static function (PDO $pdo): void {
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS certificate_email_log (
+            id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            certificate_id INT UNSIGNED NOT NULL,
+            status ENUM("sent","failed","retried") NOT NULL,
+            message VARCHAR(255) NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_certificate_email_log_certificate (certificate_id),
+            CONSTRAINT fk_certificate_email_log_certificate
+                FOREIGN KEY (certificate_id) REFERENCES certificates(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB'
+    );
+};
+$ensureEmailLogTable($pdo);
+
+$sendCertificateEmail = static function (PDO $pdo, int $certificateId, bool $isRetry = false): bool {
     $stmt = $pdo->prepare(
         'SELECT
             c.id,
@@ -39,11 +55,15 @@ $sendCertificateEmail = static function (PDO $pdo, int $certificateId): bool {
     $certificate = $stmt->fetch();
 
     if ($certificate === false || empty($certificate['file_path'])) {
+        $logStmt = $pdo->prepare('INSERT INTO certificate_email_log (certificate_id, status, message) VALUES (?, ?, ?)');
+        $logStmt->execute([$certificateId, 'failed', 'Missing certificate record or file path']);
         return false;
     }
 
     $absolutePath = dirname(__DIR__, 2) . '/' . ltrim((string) $certificate['file_path'], '/');
     if (!is_file($absolutePath)) {
+        $logStmt = $pdo->prepare('INSERT INTO certificate_email_log (certificate_id, status, message) VALUES (?, ?, ?)');
+        $logStmt->execute([$certificateId, 'failed', 'Certificate file missing on disk']);
         return false;
     }
 
@@ -62,13 +82,22 @@ $sendCertificateEmail = static function (PDO $pdo, int $certificateId): bool {
         </html>
     ';
 
-    return Mailer::sendMail(
+    $ok = Mailer::sendMail(
         (string) $certificate['email'],
         (string) $certificate['name'],
         $subject,
         $body,
         [['path' => $absolutePath, 'name' => 'certificate-' . $certificate['id'] . '.pdf']]
     );
+
+    $logStmt = $pdo->prepare('INSERT INTO certificate_email_log (certificate_id, status, message) VALUES (?, ?, ?)');
+    $logStmt->execute([
+        $certificateId,
+        $ok ? ($isRetry ? 'retried' : 'sent') : 'failed',
+        $ok ? 'Email sent successfully' : 'SMTP send failed',
+    ]);
+
+    return $ok;
 };
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -159,6 +188,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect('portal/admin/certificates.php?hackathon_id=' . $selectedHackathonId);
     }
 
+    if ($action === 'regenerate_selected' && $selectedHackathonId) {
+        $selectedCertificateIds = array_map('intval', (array) ($_POST['certificate_ids'] ?? []));
+        $regenerated = 0;
+
+        foreach ($selectedCertificateIds as $certificateId) {
+            if ($certificateId <= 0) {
+                continue;
+            }
+
+            $certStmt = $pdo->prepare(
+                'SELECT id, participant_id, hackathon_id, cert_type, position, special_title
+                 FROM certificates
+                 WHERE id = ? AND hackathon_id = ?
+                 LIMIT 1'
+            );
+            $certStmt->execute([$certificateId, $selectedHackathonId]);
+            $certificate = $certStmt->fetch();
+            if ($certificate === false) {
+                continue;
+            }
+
+            Certificate::generate(
+                (int) $certificate['participant_id'],
+                (int) $certificate['hackathon_id'],
+                (string) $certificate['cert_type'],
+                $certificate['position'] !== null ? (int) $certificate['position'] : null,
+                (string) ($certificate['special_title'] ?? '')
+            );
+            $regenerated++;
+        }
+
+        flash('success', 'Regenerated certificates: ' . $regenerated . '.');
+        redirect('portal/admin/certificates.php?hackathon_id=' . $selectedHackathonId);
+    }
+
     if ($action === 'email_all' && $selectedHackathonId) {
         $certStmt = $pdo->prepare('SELECT id FROM certificates WHERE hackathon_id = ? AND is_revoked = 0');
         $certStmt->execute([$selectedHackathonId]);
@@ -178,7 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'retry_email') {
         $certificateId = filter_input(INPUT_POST, 'certificate_id', FILTER_VALIDATE_INT);
         if ($certificateId !== false && $certificateId !== null) {
-            $ok = $sendCertificateEmail($pdo, $certificateId);
+            $ok = $sendCertificateEmail($pdo, $certificateId, true);
             flash('success', $ok ? 'Certificate email sent.' : 'Certificate email failed.');
         }
         redirect('portal/admin/certificates.php?hackathon_id=' . $selectedHackathonId);
@@ -188,6 +252,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $participants = [];
 $teams = [];
 $certificates = [];
+$emailStatusFilter = (string) ($_GET['email_status'] ?? '');
 if ($selectedHackathonId) {
     $participantsStmt = $pdo->prepare(
         'SELECT p.id, p.name, p.participant_type, p.email
@@ -213,9 +278,20 @@ if ($selectedHackathonId) {
             c.issued_at,
             c.special_title,
             p.name AS participant_name,
-            p.participant_type
+            p.participant_type,
+            el.status AS last_email_status,
+            el.created_at AS last_email_at
          FROM certificates c
          INNER JOIN participants p ON p.id = c.participant_id
+         LEFT JOIN (
+            SELECT l1.certificate_id, l1.status, l1.created_at
+            FROM certificate_email_log l1
+            INNER JOIN (
+                SELECT certificate_id, MAX(id) AS max_id
+                FROM certificate_email_log
+                GROUP BY certificate_id
+            ) latest ON latest.max_id = l1.id
+         ) el ON el.certificate_id = c.id
          WHERE c.hackathon_id = ?
          ORDER BY c.issued_at DESC'
     );
@@ -319,6 +395,24 @@ require_once __DIR__ . '/../../includes/header.php';
         </form>
     </section>
 
+    <section class="card" style="margin-bottom:24px;">
+        <h2>Delivery Log Filter</h2>
+        <form method="get" action="<?= e(appPath('portal/admin/certificates.php')) ?>" style="margin-top:12px;">
+            <input type="hidden" name="hackathon_id" value="<?= e((string) $selectedHackathonId) ?>">
+            <div class="form-group" style="max-width:320px;">
+                <label for="email_status">Email Status</label>
+                <select id="email_status" name="email_status">
+                    <option value="">All</option>
+                    <option value="sent" <?= $emailStatusFilter === 'sent' ? 'selected' : '' ?>>Sent</option>
+                    <option value="failed" <?= $emailStatusFilter === 'failed' ? 'selected' : '' ?>>Failed</option>
+                    <option value="retried" <?= $emailStatusFilter === 'retried' ? 'selected' : '' ?>>Retried</option>
+                    <option value="pending" <?= $emailStatusFilter === 'pending' ? 'selected' : '' ?>>Pending</option>
+                </select>
+            </div>
+            <button type="submit" class="btn-primary">Apply</button>
+        </form>
+    </section>
+
     <section class="card">
         <h2>Issued Certificates</h2>
         <?php if ($certificates === []): ?>
@@ -326,13 +420,21 @@ require_once __DIR__ . '/../../includes/header.php';
         <?php else: ?>
             <div class="table-shell" style="margin-top:14px;">
                 <table>
-                    <thead><tr><th>Participant</th><th>Type</th><th>Status</th><th>Issued</th><th>Actions</th></tr></thead>
+                    <thead><tr><th>Select</th><th>Participant</th><th>Type</th><th>Status</th><th>Email</th><th>Issued</th><th>Actions</th></tr></thead>
                     <tbody>
                     <?php foreach ($certificates as $certificate): ?>
+                        <?php
+                        $emailState = (string) ($certificate['last_email_status'] ?? 'pending');
+                        if ($emailStatusFilter !== '' && $emailState !== $emailStatusFilter) {
+                            continue;
+                        }
+                        ?>
                         <tr>
+                            <td><input type="checkbox" form="regen-form" name="certificate_ids[]" value="<?= e((string) $certificate['id']) ?>"></td>
                             <td><?= e((string) $certificate['participant_name']) ?><br><span class="page-subtitle"><?= e((string) $certificate['participant_type']) ?></span></td>
                             <td><?= e(ucwords(str_replace('_', ' ', (string) $certificate['cert_type']))) ?><?= ($certificate['cert_type'] === 'special' && !empty($certificate['special_title'])) ? '<br><span class="page-subtitle">' . e((string) $certificate['special_title']) . '</span>' : '' ?></td>
                             <td><span class="badge <?= (int) $certificate['is_revoked'] === 1 ? 'badge-muted' : 'badge-success' ?>"><?= (int) $certificate['is_revoked'] === 1 ? 'Revoked' : 'Active' ?></span></td>
+                            <td><?= e(ucfirst($emailState)) ?><?= $certificate['last_email_at'] ? '<br><span class="page-subtitle">' . e(formatUtcToIst((string) $certificate['last_email_at'])) . '</span>' : '' ?></td>
                             <td><?= e(formatUtcToIst((string) $certificate['issued_at'])) ?></td>
                             <td>
                                 <a class="btn-ghost" href="<?= e(appPath('public/certificate-file.php?certificate_id=' . (int) $certificate['id'])) ?>">Download</a>
@@ -358,6 +460,11 @@ require_once __DIR__ . '/../../includes/header.php';
                     </tbody>
                 </table>
             </div>
+            <form id="regen-form" method="post" action="<?= e(appPath('portal/admin/certificates.php?hackathon_id=' . (int) $selectedHackathonId)) ?>" style="margin-top:14px;">
+                <?= CSRF::field() ?>
+                <input type="hidden" name="action" value="regenerate_selected">
+                <button type="submit" class="btn-ghost">Regenerate Selected (Latest Template)</button>
+            </form>
         <?php endif; ?>
     </section>
 <?php endif; ?>

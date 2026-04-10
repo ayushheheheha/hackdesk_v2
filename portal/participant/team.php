@@ -47,6 +47,34 @@ $fetchTeam = static function (PDO $pdo, int $participantId): array|false {
     return $stmt->fetch();
 };
 
+$recomputeTeamStatus = static function (PDO $pdo, int $teamId): void {
+    $stmt = $pdo->prepare(
+        'SELECT
+            t.id,
+            t.status,
+            t.problem_statement_id,
+            h.min_team_size
+         FROM teams t
+         INNER JOIN hackathons h ON h.id = t.hackathon_id
+         WHERE t.id = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$teamId]);
+    $teamRow = $stmt->fetch();
+    if ($teamRow === false || (string) $teamRow['status'] === 'disqualified') {
+        return;
+    }
+
+    $countStmt = $pdo->prepare('SELECT COUNT(id) AS member_count FROM team_members WHERE team_id = ?');
+    $countStmt->execute([$teamId]);
+    $memberCount = (int) ($countStmt->fetch()['member_count'] ?? 0);
+    $hasProblemStatement = $teamRow['problem_statement_id'] !== null;
+
+    $nextStatus = ($memberCount >= (int) $teamRow['min_team_size'] && $hasProblemStatement) ? 'complete' : 'forming';
+    $updateStmt = $pdo->prepare('UPDATE teams SET status = ? WHERE id = ?');
+    $updateStmt->execute([$nextStatus, $teamId]);
+};
+
 $team = $fetchTeam($pdo, $participantId);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -122,9 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $insertMemberStmt = $pdo->prepare('INSERT INTO team_members (team_id, participant_id) VALUES (?, ?)');
             $insertMemberStmt->execute([(int) $targetTeam['id'], $participantId]);
             $memberCount++;
-            $status = $memberCount >= (int) $targetTeam['max_team_size'] ? 'complete' : 'forming';
-            $updateTeamStmt = $pdo->prepare('UPDATE teams SET status = ? WHERE id = ?');
-            $updateTeamStmt->execute([$status, (int) $targetTeam['id']]);
+            $recomputeTeamStatus($pdo, (int) $targetTeam['id']);
             $pdo->commit();
             flash('success', 'You joined ' . $targetTeam['name'] . ' successfully.');
         } catch (Throwable $throwable) {
@@ -147,8 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $deleteStmt = $pdo->prepare('DELETE FROM team_members WHERE team_id = ? AND participant_id = ?');
             $deleteStmt->execute([(int) $team['id'], $memberParticipantId]);
-            $updateStmt = $pdo->prepare('UPDATE teams SET status = ? WHERE id = ?');
-            $updateStmt->execute(['forming', (int) $team['id']]);
+            $recomputeTeamStatus($pdo, (int) $team['id']);
             flash('success', 'Team member removed.');
             redirect('portal/participant/team.php');
         }
@@ -203,6 +228,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $updateStmt = $pdo->prepare('UPDATE teams SET problem_statement_id = ?, ps_locked = 0 WHERE id = ?');
             $updateStmt->execute([$problemStatementId, (int) $team['id']]);
+            $recomputeTeamStatus($pdo, (int) $team['id']);
             flash('success', 'Problem statement updated.');
             redirect('portal/participant/team.php');
         }
@@ -262,6 +288,28 @@ if ($team !== false) {
     }
 }
 
+$lifecycleBadge = null;
+if ($team !== false) {
+    $memberCount = count($teamMembers);
+    $minSize = (int) ($team['min_team_size'] ?? 2);
+    $hasPs = (int) ($team['problem_statement_id'] ?? 0) > 0;
+    $allCheckedIn = $teamMembers !== [] && count(array_filter($teamMembers, static fn(array $member): bool => ($member['check_in_status'] ?? '') === 'checked_in')) === count($teamMembers);
+
+    if ((string) $team['status'] === 'disqualified') {
+        $lifecycleBadge = ['class' => 'badge-danger', 'label' => 'Disqualified'];
+    } elseif ((int) $team['ps_locked'] === 1) {
+        $lifecycleBadge = ['class' => 'badge-warning', 'label' => 'Locked'];
+    } elseif ($memberCount < $minSize) {
+        $lifecycleBadge = ['class' => 'badge-muted', 'label' => 'Forming'];
+    } elseif (!$hasPs) {
+        $lifecycleBadge = ['class' => 'badge-warning', 'label' => 'Awaiting PS'];
+    } elseif (!$allCheckedIn) {
+        $lifecycleBadge = ['class' => 'badge-warning', 'label' => 'Awaiting Check-In'];
+    } else {
+        $lifecycleBadge = ['class' => 'badge-success', 'label' => 'Eligible'];
+    }
+}
+
 $pageTitle = 'My Team';
 require_once __DIR__ . '/../../includes/header.php';
 ?>
@@ -310,6 +358,7 @@ require_once __DIR__ . '/../../includes/header.php';
             <div class="stat-label">Team Name</div>
             <div class="stat-value" style="font-size:22px;"><?= e((string) $team['name']) ?></div>
             <p class="page-subtitle" style="margin-top:10px;">Status: <?= e(ucfirst((string) $team['status'])) ?></p>
+            <?php if ($lifecycleBadge !== null): ?><p style="margin-top:10px;"><span class="badge <?= e((string) $lifecycleBadge['class']) ?>"><?= e((string) $lifecycleBadge['label']) ?></span></p><?php endif; ?>
         </article>
         <article class="card">
             <div class="stat-label">Team Size</div>

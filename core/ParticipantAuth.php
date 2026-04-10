@@ -213,6 +213,69 @@ final class ParticipantAuth
         return $participant !== false ? $participant : null;
     }
 
+    public static function registrationsForCurrentParticipant(): array
+    {
+        if (!self::check()) {
+            return [];
+        }
+
+        $pdo = Database::getConnection();
+        $emailStmt = $pdo->prepare('SELECT email, participant_type FROM participants WHERE id = ? LIMIT 1');
+        $emailStmt->execute([(int) $_SESSION['participant_id']]);
+        $current = $emailStmt->fetch();
+        if ($current === false) {
+            return [];
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT
+                p.id,
+                p.hackathon_id,
+                p.participant_type,
+                h.name AS hackathon_name,
+                h.venue,
+                h.starts_at
+             FROM participants p
+             INNER JOIN hackathons h ON h.id = p.hackathon_id
+             WHERE LOWER(p.email) = LOWER(?) AND p.participant_type = ?
+             ORDER BY h.starts_at DESC, p.id DESC'
+        );
+        $stmt->execute([(string) $current['email'], (string) $current['participant_type']]);
+
+        return $stmt->fetchAll();
+    }
+
+    public static function switchHackathonForCurrentParticipant(int $hackathonId): bool
+    {
+        if (!self::check()) {
+            return false;
+        }
+
+        $pdo = Database::getConnection();
+        $currentStmt = $pdo->prepare('SELECT email, participant_type FROM participants WHERE id = ? LIMIT 1');
+        $currentStmt->execute([(int) $_SESSION['participant_id']]);
+        $current = $currentStmt->fetch();
+        if ($current === false) {
+            return false;
+        }
+
+        $targetStmt = $pdo->prepare(
+            'SELECT id, hackathon_id
+             FROM participants
+             WHERE LOWER(email) = LOWER(?) AND participant_type = ? AND hackathon_id = ?
+             LIMIT 1'
+        );
+        $targetStmt->execute([(string) $current['email'], (string) $current['participant_type'], $hackathonId]);
+        $target = $targetStmt->fetch();
+        if ($target === false) {
+            return false;
+        }
+
+        self::loginParticipant((int) $target['id'], (int) $target['hackathon_id']);
+
+        return true;
+    }
+
     public static function logout(): void
     {
         unset($_SESSION['participant_id'], $_SESSION['participant_hackathon_id']);
