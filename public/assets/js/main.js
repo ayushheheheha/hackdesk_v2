@@ -14,9 +14,9 @@ function showToast(message, type = 'success') {
     })();
 
     const colors = {
-        success: ['#4ADE80', 'rgba(74,222,128,0.12)'],
-        error: ['#F87171', 'rgba(248,113,113,0.12)'],
-        warning: ['#FBBF24', 'rgba(251,191,36,0.12)'],
+        success: ['#1F7A43', 'rgba(31,122,67,0.12)', '#1A3D26'],
+        error: ['#9D2F2F', 'rgba(157,47,47,0.12)', '#5B1D1D'],
+        warning: ['#9B6700', 'rgba(155,103,0,0.12)', '#5A3D07'],
     };
 
     const selected = colors[type] || colors.success;
@@ -28,8 +28,9 @@ function showToast(message, type = 'success') {
     toast.style.borderRadius = '10px';
     toast.style.border = `1px solid ${selected[0]}`;
     toast.style.background = selected[1];
-    toast.style.color = '#FAFAFA';
-    toast.style.boxShadow = '0 8px 24px rgba(0,0,0,0.25)';
+    toast.style.color = selected[2];
+    toast.style.fontWeight = '600';
+    toast.style.boxShadow = '0 10px 24px rgba(56, 44, 25, 0.12)';
     toast.style.transform = 'translateY(16px)';
     toast.style.opacity = '0';
     toast.style.transition = 'transform 0.2s ease, opacity 0.2s ease';
