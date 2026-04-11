@@ -36,6 +36,7 @@ $otpRequested = false;
 $otpVerified = false;
 $otpError = null;
 $registrationChoices = [];
+$currentAction = '';
 
 if ($otpEmail !== '' && filter_var($otpEmail, FILTER_VALIDATE_EMAIL)) {
     $registrationChoices = ParticipantAuth::findRegistrationsForEmail($otpEmail, $selectedType);
@@ -46,6 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $otpError = 'Your session token is invalid. Please refresh the page and try again.';
     } else {
         $action = trim((string) ($_POST['action'] ?? ''));
+        $currentAction = $action;
 
         if ($action === 'request_otp') {
             if ($otpEmail === '' || !filter_var($otpEmail, FILTER_VALIDATE_EMAIL)) {
@@ -75,6 +77,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 }
+
+$showOtpVerification = $otpRequested || $currentAction === 'verify_otp';
 
 if ($token !== '') {
     $success = ParticipantAuth::loginWithToken($token);
@@ -196,28 +200,32 @@ require_once __DIR__ . '/../includes/header.php';
                 <button type="submit" class="btn-primary">Send OTP</button>
             </form>
 
-            <form method="post" action="<?= e(appPath('public/participant-login.php' . (($hackathonId || $selectedType !== null) ? '?' . http_build_query(array_filter([
-                'h' => $hackathonId ?: null,
-                'type' => $selectedType,
-            ])) : ''))) ?>" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
-                <?= CSRF::field() ?>
-                <input type="hidden" name="action" value="verify_otp">
-                <?php if ($hackathonId): ?>
-                    <input type="hidden" name="hackathon_id" value="<?= e((string) $hackathonId) ?>">
-                <?php endif; ?>
-                <?php if ($selectedType !== null): ?>
-                    <input type="hidden" name="participant_type" value="<?= e($selectedType) ?>">
-                <?php endif; ?>
-                <div class="form-group">
-                    <label for="otp_email">Participant Email</label>
-                    <input id="otp_email" name="email" type="email" required value="<?= e($otpEmail) ?>">
-                </div>
-                <div class="form-group">
-                    <label for="otp_code">6-Digit OTP</label>
-                    <input id="otp_code" name="otp_code" type="text" inputmode="numeric" pattern="\d{6}" maxlength="6" required>
-                </div>
-                <button type="submit" class="btn-primary">Verify OTP</button>
-            </form>
+            <?php if ($showOtpVerification): ?>
+                <form method="post" action="<?= e(appPath('public/participant-login.php' . (($hackathonId || $selectedType !== null) ? '?' . http_build_query(array_filter([
+                    'h' => $hackathonId ?: null,
+                    'type' => $selectedType,
+                ])) : ''))) ?>" style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border);">
+                    <?= CSRF::field() ?>
+                    <input type="hidden" name="action" value="verify_otp">
+                    <?php if ($hackathonId): ?>
+                        <input type="hidden" name="hackathon_id" value="<?= e((string) $hackathonId) ?>">
+                    <?php endif; ?>
+                    <?php if ($selectedType !== null): ?>
+                        <input type="hidden" name="participant_type" value="<?= e($selectedType) ?>">
+                    <?php endif; ?>
+                    <div class="form-group">
+                        <label for="otp_email">Participant Email</label>
+                        <input id="otp_email" name="email" type="email" required value="<?= e($otpEmail) ?>">
+                    </div>
+                    <div class="form-group">
+                        <label for="otp_code">6-Digit OTP</label>
+                        <input id="otp_code" name="otp_code" type="text" inputmode="numeric" pattern="\d{6}" maxlength="6" required>
+                    </div>
+                    <button type="submit" class="btn-primary">Verify OTP</button>
+                </form>
+            <?php else: ?>
+                <p class="page-subtitle" style="margin-top:20px;">Enter your email and send OTP to unlock the verification step.</p>
+            <?php endif; ?>
         <?php endif; ?>
     </article>
 
